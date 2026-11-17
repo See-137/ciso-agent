@@ -1,0 +1,525 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>CISO Agent Flow</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+:root{color-scheme:dark;--bg:#070b14;--bg2:#0c1322;--cell:#0f1829;--edge:#22314d;--ink:#e8eefb;--ink2:#a6b3cc;--ink3:#8a97b2;--accent:#5ee6c8;--gate:#ffc35c;--bad:#ff7a6b;
+  --font:"Segoe UI","Noto Sans Hebrew",system-ui,sans-serif;--mono:ui-monospace,"Cascadia Mono",Consolas,Menlo,Arial,monospace}
+*{box-sizing:border-box}html,body{background:var(--bg);margin:0}[hidden]{display:none!important}
+body{color:var(--ink);font:14px/1.55 var(--font);background:radial-gradient(1200px 600px at 85% -10%,rgba(94,230,200,.08),transparent 60%),radial-gradient(900px 500px at 5% 40%,rgba(98,176,255,.07),transparent 60%),var(--bg)}
+.wrap{max-width:1640px;margin:0 auto;padding-block:28px 56px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));display:grid;gap:20px;min-width:0}
+.wrap>*{min-width:0}
+.eyebrow{font:12px var(--mono);letter-spacing:.14em;color:var(--accent);text-transform:uppercase}[dir=rtl] .eyebrow{letter-spacing:0}[dir=rtl] h1{font-weight:700}
+h1{margin:0;font-size:clamp(28px,4.4vw,52px);font-weight:800;line-height:1.05;text-wrap:balance}
+.lede{margin:0;color:var(--ink2);font-size:16px;max-width:72ch}
+.cfgerr{margin:0;padding:14px 18px;padding-inline-start:36px;border:1px solid var(--bad);border-radius:12px;color:var(--bad);font:13px/1.6 var(--mono)}
+.bar{display:flex;flex-wrap:wrap;gap:10px;justify-content:space-between;align-items:center}
+.caption{flex:1 1 420px;min-width:0;min-height:46px;display:flex;gap:12px;align-items:center;padding:10px 16px;border-radius:12px;border:1px solid var(--edge);background:rgba(255,255,255,.03)}
+.caption .dot{flex:none;width:10px;height:10px;border-radius:50%;background:#fff;box-shadow:0 0 14px #fff,0 0 30px var(--accent)}
+.caption span{color:var(--ink2)}
+.controls{display:flex;gap:8px;flex-wrap:wrap}
+button{font:inherit;font-size:13px;color:var(--ink);background:var(--bg2);border:1px solid var(--edge);border-radius:10px;padding:8px 14px;cursor:pointer}
+button:hover{border-color:var(--accent)}button.primary{color:var(--gate);border-color:rgba(255,195,92,.55)}
+button:focus-visible,summary:focus-visible{outline:2px solid var(--gate);outline-offset:3px}
+.scroller{direction:ltr;overflow-x:auto;overflow-y:hidden;border-radius:20px;border:1px solid var(--edge);background-image:linear-gradient(rgba(255,255,255,.025) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.025) 1px,transparent 1px);background-size:40px 40px}
+.stage{position:relative}
+.stage>svg,.stage>canvas{position:absolute;inset:0;width:100%;height:100%;display:block}.stage canvas{pointer-events:none}
+.n{cursor:pointer;outline:none}.n .halo{animation:breathe 4.2s ease-in-out infinite;transform-box:fill-box;transform-origin:center}
+@keyframes breathe{0%,100%{opacity:.18;transform:scale(1)}50%{opacity:.42;transform:scale(1.06)}}
+.n:hover .body,.n.on .body{stroke-width:2.6}.n:focus-visible .body{stroke:#fff;stroke-width:3.5}
+.n.todo .body{stroke-dasharray:6 5}.n.todo .halo{display:none}
+.ring{animation:spin 18s linear infinite;transform-box:fill-box;transform-origin:center}@keyframes spin{to{transform:rotate(360deg)}}
+.flowline{stroke-dasharray:2 10;animation:dash 1.6s linear infinite}@keyframes dash{to{stroke-dashoffset:-24}}
+.stage.paused .halo,.stage.paused .ring,.stage.paused .flowline{animation-play-state:paused}
+.tip{position:absolute;z-index:5;width:330px;max-height:calc(100% - 16px);overflow-y:auto;background:rgba(10,16,30,.96);border:1px solid var(--edge);border-top:3px solid var(--tc,var(--accent));border-radius:14px;padding:14px 16px;box-shadow:0 20px 50px rgba(0,0,0,.55);opacity:0;visibility:hidden;pointer-events:none;transform:translateY(6px);transition:opacity .16s,transform .16s,visibility .16s}
+.tip.show{opacity:1;visibility:visible;pointer-events:auto;transform:none}.tip[dir=rtl] .sub,[dir=rtl] .files{text-align:right}.tip .ttl{margin:0 0 2px;font-size:16px;font-weight:700}.tip .sub{font:12px var(--mono);color:var(--ink3)}
+.tip .pill{display:inline-block;margin:8px 0;font-size:12px;padding:2px 9px;border-radius:999px;border:1px solid currentColor}
+.tip ul{margin:0;padding-inline-start:18px;display:grid;gap:5px;color:var(--ink2);font-size:13px}.tip .files{margin-top:10px;font:11.5px var(--mono);color:var(--ink3);word-break:break-all}
+.legend{display:flex;flex-wrap:wrap;gap:16px;color:var(--ink2);font-size:13px}.legend i{display:inline-block;width:22px;height:3px;border-radius:2px;vertical-align:middle;margin-inline-end:8px}
+.legend b{display:inline-block;width:8px;height:8px;border-radius:50%;margin-inline-end:8px}
+.swipe{margin:-8px 0;color:var(--ink3);font-size:13px}.selfcheck{border:1px solid var(--edge);border-radius:12px;padding:14px 18px;font:13px/1.6 var(--mono);color:var(--ink2);overflow-wrap:anywhere}.selfcheck strong{color:var(--ink)}.selfcheck ul{margin:8px 0 0;padding:0;list-style:none}.selfcheck .no{color:var(--bad)}
+.outline{color:var(--ink2);font-size:14px}.outline summary{cursor:pointer;color:var(--ink);width:fit-content}
+.outline ol{margin:12px 0 0;padding-inline-start:22px;display:grid;gap:12px;max-width:80ch}.outline strong{color:var(--ink)}.outline p{margin:2px 0}.outline .files{font:12px var(--mono);color:var(--ink3);word-break:break-all}
+@media (prefers-reduced-motion:reduce){.n .halo,.ring,.flowline{animation:none}.n .halo{opacity:.3}.tip{transition:none}}
+@media (max-width:640px){.caption{min-height:65px}}
+@media (pointer:coarse){button,summary{min-height:44px}}
+@media (forced-colors:active){.stage{forced-color-adjust:none;background:#070b14}}
+</style></head><body>
+<main class="wrap" id="wrap">
+  <header><div class="eyebrow" id="eyebrow"></div><h1 id="h1"></h1><p class="lede" id="lede"></p></header>
+  <ol class="cfgerr" id="cfgErr" role="alert" hidden></ol>
+  <section class="selfcheck" id="selfCheck" dir="ltr" aria-live="polite" hidden></section>
+  <div class="bar">
+    <div class="caption" id="caption" aria-live="off"><span class="dot"></span><div id="capText"></div></div>
+    <div class="controls"><button class="primary" id="bJ" type="button"></button><button id="bP" type="button"></button><button id="bS" type="button"></button></div>
+  </div>
+  <details class="outline"><summary id="listT"></summary><ol id="list"></ol></details>
+  <p class="swipe" id="swipe" hidden></p>
+  <div class="scroller" id="scroller"><div class="stage" id="stage">
+    <svg id="back" aria-hidden="true"></svg><canvas id="fx" aria-hidden="true"></canvas><svg id="front" role="group"></svg><div class="tip" id="tip" role="tooltip"></div>
+  </div></div>
+  <div class="legend" id="legend"></div>
+</main>
+<script>
+/* Runs first, so a syntax error in CONFIG explains itself instead of leaving an empty page. */
+window.__flowErrors = [];
+addEventListener('error', e => window.__flowErrors.push(e.message + (e.lineno ? ` (line ${e.lineno})` : '')));
+addEventListener('unhandledrejection', e => window.__flowErrors.push(String(e.reason)));
+addEventListener('DOMContentLoaded', () => {
+  const a = window.livingFlowMap; if (a && (a.ready || a.errors.length)) return;
+  const list = document.getElementById('cfgErr'); list.hidden = false;
+  for (const m of ['The map script stopped: ' + (window.__flowErrors[0] || 'no error was reported'), 'Usual causes: an apostrophe inside a single-quoted CONFIG string, or </' + 'script> inside a CONFIG string.']) list.appendChild(document.createElement('li')).textContent = m;
+  for (const q of ['.bar', '.scroller', '.outline']) document.querySelector(q).hidden = true;
+});
+</script>
+<script>
+/* ================= CONFIG: the only part you edit ================= */
+const SRC = 'Unified_CISO_Agent_Architecture_Implementation_Blueprint_v1.0.pdf';
+const CONFIG = {
+  dir: 'ltr',
+  lang: 'en',
+  view: [1600, 880],
+  minWidth: 1280,
+  eyebrow: 'Unified CISO agent · blueprint v1.0 · animated design map',
+  title: 'Facts in, bounded action out',
+  lede: 'Each light is one security fact or event moving through the designed CISO. Nothing here is built yet: this is the v1.0 blueprint, and the traffic is a simulation, not measurement. The model proposes; a deterministic policy engine and a human decide.',
+  ui: {follow:'Follow one event', pause:'Pause', play:'Play', speed:'Speed ×', hint:'Press "Follow one event" to watch one fact travel from a source system to a verified, audited action.', waiting:'waiting', open:'open', done:'Verified and audited. The outcome updates the registry, which shapes the next detection.', who:'role owner', list:'Read it as a list', next:'Goes to', sendsBack:'Can send back to', swipe:'Drag the map sideways to see all of it'},
+  groups: {
+    control:'#e8eefb', intel:'#62b0ff', reason:'#5ee6c8', act:'#b48cff', gate:'#ffc35c', learn:'#c58bff', back:'#ff7a6b'
+  },
+  legend: [['intel','Collect + registry'],['reason','Local reasoning'],['control','Independent control plane'],['act','Bounded execution'],['gate','Human decision'],['back','Denied / held'],['learn','Registry update loop']],
+  status: {agreed:['agreed in blueprint','#5ee6c8'], rec:['recommended, to validate','#62b0ff'], todo:['off by default in v1','#9aa7bf'], gate:['human decision','#ffc35c']},
+  nodes: [
+    {id:'src', x:140, y:130, kind:'stage', group:'intel', label:'Source systems', sub:'cloud · IAM · SaaS', long:'Cloud, identity provider, business SaaS, repositories, CI/CD, AI providers, and existing MDM/EDR where useful', st:'agreed', li:['Source systems stay authoritative for the facts they own','No CISO software on employee endpoints','Existing MDM/EDR is optional input, not a foundation'], files:SRC+' §2.2, §6.1, ADR-005/006'},
+    {id:'disc', x:400, y:130, kind:'stage', group:'intel', label:'Discovery', sub:'passive + bounded', long:'Connector plane and discovery service: continuous passive collection plus bounded active checks inside approved scope', st:'agreed', li:['Read-only connector scopes by default','Active checks only on registered, approved targets, with rate limits and exclusions','A connector outage is a coverage gap, never "no risk found"'], files:SRC+' §5.1 #6-7, §7.2-7.3, §13.1'},
+    {id:'deep', x:400, y:290, kind:'sat', group:'intel', label:'Deep testing', sub:'separate approval', long:'Pen tests, exploit validation, fuzzing, load tests: not routine discovery', st:'todo', li:['Needs its own approved test plan: target, window, stop condition','Production only when expressly approved'], files:SRC+' §7.4, FR-008'},
+    {id:'onboard', x:670, y:290, kind:'stage', group:'intel', label:'Guided onboarding', sub:'declared inventory', long:'Admins declare departments, IdPs, cloud accounts, repos, SaaS and AI apps', st:'agreed', li:['Gives a starting map, not a completeness claim','Everything stays "declared" until a source verifies it'], files:SRC+' §7.1, ADR-012'},
+    {id:'norm', x:670, y:130, kind:'stage', group:'intel', label:'Reconcile', sub:'normalize · provenance', long:'Normalization and source-authority reconciliation with field-level provenance', st:'agreed', li:['Field-level source precedence, no silent overwrites','Conflicts kept and flagged as "disputed"','States: verified, declared, inferred, disputed, unknown'], files:SRC+' §6.1, §6.5, §7.5'},
+    {id:'reg', x:940, y:130, kind:'stage', group:'intel', label:'Security registry', sub:'assets · IDs · AI', long:'The CISO-owned normalized, historical security graph: assets, identities, AI assets, relationships, owners', st:'agreed', li:["The CISO's security view, not a replacement system of record",'Typed relationships carry source, evidence, time and confidence','Relational graph is enough to start (product deferred)'], files:SRC+' §5.1 #8, §6.3-6.6'},
+    {id:'evid', x:940, y:290, kind:'sat', group:'intel', label:'Evidence store', sub:'encrypted · retained', long:'Raw or minimally transformed evidence, snapshots and artifacts', st:'rec', li:['Encryption, access control, retention, integrity checks','Avoid unnecessary raw content'], files:SRC+' §5.1 #9, §6.6'},
+    {id:'detect', x:1210, y:130, kind:'stage', group:'reason', label:'Detect + correlate', sub:'findings · risk', long:'Detections, correlation, investigation records', st:'agreed', li:['Separates fact, finding, risk and decision','No fixed risk-score formula in v1 (ADR-016 deferred)'], files:SRC+' §5.1 #10, §5.3'},
+    {id:'llm', x:1460, y:130, kind:'stage', group:'reason', label:'Local LLM', sub:'default reasoning', long:'Local model runtime behind an internal inference gateway', st:'agreed', cost:'hardware and model not chosen', li:['Private network only, no public endpoint','Retrieved content and tool output are untrusted data','If it is down, jobs queue or fall back to deterministic checks, never to an external model'], files:SRC+' §5.1 #4, §8.3, §10.4, ADR-007'},
+    {id:'ext', x:1290, y:300, kind:'gate', group:'gate', label:'External LLM call', sub:'per-request opt-in', who:'human', batch:1, long:'Propose, preview, minimize, authorize, transmit, record, reintegrate', st:'todo', li:['Gateway disabled by default','A human approves this exact payload, provider and purpose','Never a fallback for outage, low confidence or load'], files:SRC+' §8.4, ADR-008, FR-017/018'},
+    {id:'prop', x:1460, y:500, kind:'stage', group:'reason', label:'Proposal', sub:'typed envelope', long:'Structured action proposal in the action envelope', st:'agreed', li:['LLM output is untrusted: schema-validated before it counts','Envelope: target, scope, operation, evidence, risk class, expiry, rollback'], files:SRC+' §8.3, §9.4'},
+    {id:'policy', x:1180, y:500, kind:'review', group:'control', label:'Policy engine', sub:'RBAC + ABAC', badge:'deny·hold·allow', back:'prop', pb:.2, long:'Deterministic, independent authorization of every consequential action', st:'agreed', li:['Separate trust boundary from the LLM and its prompt','Fails closed for writes if policy, IdP, approval or audit is down','Classifies the action L0-L4'], files:SRC+' §5.1 #11, §9.5, FR-023'},
+    {id:'coord', x:1180, y:720, kind:'channel', group:'act', label:'L0-L2 coordinate', sub:'tickets · PRs', long:'Observe, investigate, coordinate: autonomous within scoped read access and approved channels', st:'agreed', li:['Create tickets, notify owners, draft remediation PRs and reports','No direct production change'], files:SRC+' §9.1-9.2'},
+    {id:'l4', x:900, y:500, kind:'gate', group:'gate', label:'L4 approval', sub:'one OK = one action', who:'owner', batch:1, long:'High-impact interventions: identity disablement, isolation, firewall, tenant data, policy changes', st:'gate', li:['Always needs human approval in v1','Roles defined now, people mapped later via the IdP','Risk acceptance is a human decision, never the model'], files:SRC+' §9.1-9.3, ADR-009/010'},
+    {id:'l3', x:900, y:720, kind:'stage', group:'act', label:'L3 playbook', sub:'tested · reversible', long:'Pre-approved, narrowly scoped, reversible security playbooks', st:'todo', li:['Disabled until threat-modeled, tested and approved','First release may ship with no L3 at all','Needs preconditions, limits, rollback, verification'], files:SRC+' §9.2'},
+    {id:'broker', x:640, y:500, kind:'stage', group:'act', label:'Execution broker', sub:'allowlisted tools', long:'Invokes only allowlisted, typed tools with preconditions, rate limits, idempotency and expiry', st:'agreed', li:['No shell, SQL admin or unrestricted HTTP for the agent','Separate read and write credentials, short-lived','Kill switch (outside LLM authority) can revoke its credentials and stop all writes'], files:SRC+' §5.1 #12, FR-026'},
+    {id:'verify', x:380, y:500, kind:'stage', group:'act', label:'Verify at source', sub:'not the tool reply', long:'Checks the result against the target source system', st:'agreed', li:['Success is never inferred from a tool response alone','Records outcome and residual risk'], files:SRC+' §9.5'},
+    {id:'audit', x:140, y:500, kind:'stage', group:'control', label:'Audit trail', sub:'tamper-evident', long:'Append-only record of user, agent, connector, model, policy, approval and result events', st:'agreed', li:['Separate writer identity; the agent cannot delete it','Outcome flows back into the registry'], files:SRC+' §5.1 #14, FR-028'}
+  ],
+  edges: [
+    ['src','disc','flow',1],
+    ['disc','deep','aux',0,'M386,130 L386,290'],['deep','disc','aux',0,'M414,290 L414,130'],
+    ['disc','norm','flow',1],['onboard','norm','flow',1],
+    ['norm','reg','flow',1],
+    ['reg','evid','aux',0,'M926,130 L926,290'],['evid','reg','aux',0,'M954,290 L954,130'],
+    ['reg','detect','flow',1],['detect','llm','flow',1],
+    ['llm','ext','flow',0,'M1440,145 L1280,290'],['ext','llm','flow',0,'M1305,288 L1470,148'],
+    ['llm','prop','flow',1],['prop','policy','flow',1],
+    ['policy','prop','back',0,'M1180,500 C1210,600 1430,600 1460,500'],
+    ['policy','coord','flow',.55],['policy','l4','flow',.45],['policy','l3','flow',0],
+    ['l4','broker','flow',1],['l3','broker','flow',0],
+    ['broker','verify','flow',1],['verify','audit','flow',1],
+    ['audit','reg','feed',1,'M140,500 C50,500 50,210 170,210 L860,210 C915,210 940,190 940,150']
+  ],
+  backLabel: 'deny / hold',
+  zones: [[270,40,'Collect · read-only','intel'],[940,40,'Registry · CISO security view','intel'],[1335,40,'Reason · local first','reason'],[1180,438,'Independent control','control'],[510,438,'Bounded execution','act']],
+  spine: {y:385, x1:160, x2:1120, text:'The LLM proposes; it never authorizes. Write actions fail closed.', mono:'collect → reconcile → register → detect → reason → propose → authorize → execute → verify → audit'},
+  footer: {x:420, y:790, lines:[['Kill switch: stops writes, external inference, active scans and new L3 runs · monitoring stays up','control'],['Office-hosted single instance · a power or internet loss may pause it (accepted risk)','control']]},
+  spawnFrom: {src:.75, onboard:.25}, cap: 56,
+  journey: ['src','disc','norm','reg','evid','reg','detect','llm','prop','policy','l4','broker','verify','audit','reg'],
+  say: {
+    src:'A change lands in a source system the company already uses',
+    disc:'Pulled through a read-only connector; no endpoint agent involved',
+    norm:'Normalized, and the owning source wins each field',
+    reg:'Stored in the registry with provenance and a verification state',
+    evid:'Supporting evidence goes to the encrypted evidence store',
+    detect:'Correlated with other facts into a finding',
+    llm:'Reasoned over by the local model, never an automatic external call',
+    prop:'The model emits a structured proposal, still untrusted',
+    policy:'Deterministic policy classifies it L0-L4: deny, hold or allow',
+    l4:'High impact, so it waits for the role owner to approve this one action',
+    broker:'Runs only an allowlisted, typed tool within scope and expiry',
+    verify:'Checked against the source system itself',
+    audit:'Written to a tamper-evident trail, then back into the registry'
+  }
+};
+/* ================= ENGINE: no edits needed ================= */
+(() => {
+'use strict';
+const K = CONFIG, C = K.groups || {}, NS = 'http://www.w3.org/2000/svg', $ = id => document.getElementById(id);
+const SIZE = {stage:[176,64], review:[192,72], gate:[88,88], sat:[176,54], channel:[190,64]};
+const api = window.livingFlowMap = {errors:[], warnings:[], stats:{frames:0, spawned:0, entered:{}, dead:{}, sent:{}, released:0, releasedBy:{}, journeys:0}, setSpeed:v => { speed = v; }};
+const S = api.stats;
+
+// Config errors stop the map and are listed on the page: a typo must never leave a blank or frozen map.
+const sourcesOf = () => typeof K.spawnFrom==='object' && K.spawnFrom ? Object.entries(K.spawnFrom) : [[K.spawnFrom,1]];
+function configErrors(){
+  const bad = [], ids = new Set(), must = (ok,msg) => { if (!ok) bad.push(msg); };
+  if (!Array.isArray(K.view) || K.view.length!==2 || !(K.view[0]>0) || !(K.view[1]>0)) bad.push('view must be [width, height]');
+  if (!Array.isArray(K.nodes) || !K.nodes.length) bad.push('nodes is empty');
+  if (!Array.isArray(K.edges) || !K.edges.length) bad.push('edges is empty');
+  if (bad.length) return bad;
+  for (const key of ['follow','pause','play','speed','hint','waiting','open','done','who','list','next','sendsBack','swipe']) must(K.ui && typeof K.ui[key]==='string', `ui.${key} is missing`);
+  for (const n of K.nodes) { must(!ids.has(n.id), `duplicate node id "${n.id}"`); ids.add(n.id);
+    must(SIZE[n.kind], `node "${n.id}": unknown kind "${n.kind}"`); must(C[n.group], `node "${n.id}": group "${n.group}" is not in groups`);
+    must(Number.isFinite(n.x)&&Number.isFinite(n.y), `node "${n.id}": x and y must be numbers`);
+    must(!n.st || (K.status&&K.status[n.st]), `node "${n.id}": status "${n.st}" is not in status`); }
+  const pairs = new Set(), todo = id => (K.nodes.find(n => n.id===id)||{}).st==='todo';
+  for (const [a,b,kind,w] of K.edges) {
+    must(ids.has(a), `edge ${a} -> ${b}: unknown node "${a}"`); must(ids.has(b), `edge ${a} -> ${b}: unknown node "${b}"`);
+    must(['flow','back','feed','aux'].includes(kind), `edge ${a} -> ${b}: unknown kind "${kind}"`);
+    must(a!==b, `edge ${a} -> ${b}: a node cannot link to itself`);
+    if ((kind==='flow'||kind==='feed') && !todo(a) && !todo(b)) must(typeof w==='number'&&w>0, `edge ${a} -> ${b}: ${kind} edges need a numeric weight above 0 (it only sets the drawn proportion)`);
+    if (kind==='back') must(C.back, 'groups.back is required for back edges');
+    if (kind==='feed') must(C.learn, 'groups.learn is required for feed edges');
+    pairs.add(`${a}>${b}`); }
+  const forward = id => K.edges.filter(e => e[0]===id && (e[2]==='flow'||e[2]==='feed'));
+  for (const [a,b,kind] of K.edges) if (kind==='aux') must(K.edges.some(e => e[0]===b&&e[1]===a&&e[2]==='aux'), `aux edge ${a} -> ${b} needs its return edge ${b} -> ${a}`);
+  for (const n of K.nodes) {
+    if (n.back) { must(K.edges.some(e => e[0]===n.id&&e[1]===n.back&&e[2]==='back'), `node "${n.id}": back:"${n.back}" has no matching back edge`); must(n.pb>0&&n.pb<1, `node "${n.id}": pb must be between 0 and 1`); }
+    if (n.kind==='gate' && n.st!=='todo') must(forward(n.id).some(e => !todo(e[1])), `gate "${n.id}" needs an outgoing flow edge to a built node, or its queue could never release`);
+    if (n.batch!==undefined) must(Number.isInteger(n.batch)&&n.batch>0, `node "${n.id}": batch must be a whole number above 0`);
+  }
+  for (const [a,b,kind] of K.edges) if (kind==='back') must(K.nodes.some(n => n.id===a&&n.back===b), `back edge ${a} -> ${b} needs back:"${b}" and pb on node "${a}"`);
+  for (const [id,w] of sourcesOf()) { must(ids.has(id), `spawnFrom "${id}" is not a node`); must(w>0, `spawnFrom "${id}": weight must be above 0`);
+    must(!todo(id) && forward(id).some(e => !todo(e[1])), `spawnFrom "${id}" must be built and have an outgoing flow edge to a built node`); }
+  must(K.edges.some(e => e[2]==='flow'), 'at least one flow edge is required');
+  must(K.cap>0, 'cap must be above 0');
+  if (K.journey) { must(K.journey.length>=2, 'journey needs at least two nodes');
+    K.journey.forEach((id,i) => { must(ids.has(id), `journey[${i}]: unknown node "${id}"`); if (i) must(pairs.has(`${K.journey[i-1]}>${id}`), `journey[${i-1}] -> journey[${i}]: there is no edge ${K.journey[i-1]} -> ${id}`); }); }
+  for (const id of Object.keys(K.say||{})) must(ids.has(id), `say: unknown node "${id}"`);
+  for (const [g] of K.legend||[]) must(C[g], `legend: group "${g}" is not in groups`);
+  for (const z of K.zones||[]) must(C[z[3]], `zones: group "${z[3]}" is not in groups`);
+  return bad;
+}
+const root = document.documentElement; root.dir = K.dir||'ltr'; root.lang = K.lang || (K.dir==='rtl' ? 'he' : 'en');
+try { api.errors = configErrors(); } catch (err) { api.errors = [`CONFIG has the wrong shape: ${err.message}`]; }
+if (api.errors.length) {
+  api.errors.forEach(m => console.error('[flow-map] '+m));
+  for (const [id,v] of [['eyebrow','Flow map config error'],['h1',K.title||'Flow map'],['lede','Fix these lines in CONFIG. The map does not start until they are clean.']]) $(id).textContent = v;
+  const list = $('cfgErr'); list.hidden = false; api.errors.forEach(m => { list.appendChild(document.createElement('li')).textContent = m; });
+  document.querySelector('.bar').hidden = true; $('scroller').hidden = true; document.querySelector('.outline').hidden = true; 
+  return;
+}
+
+const [VW, VH] = K.view, TINT = C[Object.keys(C)[0]], SRC = sourcesOf().map(([id,w]) => ({id,w}));
+api.sources = SRC.map(s => s.id);
+const RTL = /[\u0590-\u08FF\uFB1D-\uFDFF\uFE70-\uFEFF]/, bidi = s => RTL.test(s) ? 'rtl' : 'ltr'; // each string gets the direction of its own script, so mixed Hebrew and Latin reads in the right order
+for (const [id,v] of [['eyebrow',K.eyebrow],['h1',K.title],['lede',K.lede]]) $(id).textContent = v;
+const stage = $('stage'), scroller = $('scroller'), back = $('back'), front = $('front');
+stage.style.aspectRatio = `${VW}/${VH}`; stage.style.width = `max(${K.minWidth||1280}px,100%)`;
+for (const s of [back, front]) s.setAttribute('viewBox', `0 0 ${VW} ${VH}`);
+front.setAttribute('aria-label', K.title);
+const el = (t,a={},p) => { const e = document.createElementNS(NS,t); for (const k in a) e.setAttribute(k,a[k]); if (p) p.appendChild(e); return e; };
+const txt = (p,a,s) => { const t = el('text',a,p); t.textContent = s; return t; };
+const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const N = Object.fromEntries(K.nodes.map(n => [n.id, n]));
+const free = []; // free-floating labels, checked against node boxes after layout
+const defs = el('defs',{},back), f = el('filter',{id:'soft',x:'-50%',y:'-50%',width:'200%',height:'200%'},defs); el('feGaussianBlur',{stdDeviation:'14'},f);
+const spacing = K.dir==='rtl' ? {} : {'letter-spacing':1.5}; // letter-spacing breaks joined scripts such as Arabic
+for (const [x,y,s,g] of K.zones||[]) free.push(txt(back,{x,y,fill:C[g],'font-size':13,'text-anchor':'middle',opacity:.8,direction:bidi(s),...spacing},s));
+if (K.spine) { const s = K.spine; el('line',{x1:s.x1,y1:s.y+7,x2:s.x2,y2:s.y+7,stroke:'#2a3b5c','stroke-dasharray':'3 7','stroke-width':1.5},back);
+  free.push(txt(back,{x:(s.x1+s.x2)/2,y:s.y,'text-anchor':'middle',fill:'#8b98b3','font-size':13.5,direction:bidi(s.text)},s.text));
+  if (s.mono) free.push(txt(back,{x:(s.x1+s.x2)/2,y:s.y+24,'text-anchor':'middle',fill:'#8492ad','font-size':12.5,'font-family':'ui-monospace,Consolas,Arial,monospace',direction:bidi(s.mono)},s.mono)); }
+const E = K.edges.map(([a,b,kind,w,d],i) => ({i,a,b,kind,w,d}));
+const live = e => N[e.b].st!=='todo' && N[e.a].st!=='todo'; // work never moves through something that does not exist yet
+for (const n of K.nodes) if (n.back) n.backEdge = E.find(e => e.a===n.id && e.b===n.back && e.kind==='back');
+for (const e of E) {
+  const A = N[e.a], B = N[e.b], off = !live(e);
+  if (!e.d) { if (Math.abs(A.y-B.y)<2) e.d = `M${A.x},${A.y} L${B.x},${B.y}`; else { const m=(A.x+B.x)/2; e.d = `M${A.x},${A.y} C${m},${A.y} ${m},${B.y} ${B.x},${B.y}`; } }
+  e.col = e.kind==='back' ? C.back : e.kind==='feed' ? C.learn : (A.group==='review' ? TINT : C[A.group]);
+  e.el = el('path',{d:e.d,fill:'none',stroke:e.col,'stroke-opacity':e.kind==='flow'&&!off?.22:.35,'stroke-width':e.kind==='feed'?2.2:1.6,'stroke-dasharray':e.kind==='back'||off?'5 6':'none'},back);
+  if (e.kind!=='back' && !off) el('path',{d:e.d,fill:'none',stroke:e.col,'stroke-opacity':.55,'stroke-width':1.4,class:'flowline'},back);
+  else if (e.kind==='back') { const p = e.el.getPointAtLength(e.el.getTotalLength()/2); free.push(txt(back,{x:p.x,y:p.y-7,fill:C.back,'font-size':12.5,'text-anchor':'middle',direction:bidi(K.backLabel||'')},K.backLabel||'')); }
+  const len = e.el.getTotalLength(), n = Math.max(2, Math.ceil(len/3)+1), pts = new Float32Array(n*2);
+  for (let i=0;i<n;i++){ const p = e.el.getPointAtLength(i*len/(n-1)); pts[i*2]=p.x; pts[i*2+1]=p.y; }
+  Object.assign(e,{len,pts,n});
+}
+const outs = id => E.filter(e => e.a===id && (e.kind==='flow'||e.kind==='feed') && live(e));
+const edge = (a,b) => E.find(e => e.a===a && e.b===b);
+if (K.footer) K.footer.lines.forEach(([s,c],i) => free.push(txt(back,{x:K.footer.x,y:K.footer.y+i*20,fill:C[c]||'#a6b3cc','font-size':i?12.5:15,'font-weight':i?400:700,direction:bidi(s),'text-anchor':'middle'},s)));
+const HEX = 'M-96,0 L-74,-36 L74,-36 L96,0 L74,36 L-74,36 Z', MONO = 'ui-monospace,Consolas,Arial,monospace';
+K.nodes.forEach((n,idx) => {
+  const col = C[n.group], st = K.status && K.status[n.st];
+  const g = el('g',{class:'n'+(n.st==='todo'?' todo':''),transform:`translate(${n.x},${n.y})`,tabindex:0,role:'button','aria-label':[n.label,n.sub,st&&st[0]].filter(Boolean).join('. ')},front); n.g = g;
+  const halo = {class:'halo',filter:'url(#soft)',style:`animation-delay:${-idx*.37}s`};
+  if (n.kind==='gate') {
+    n.halo = el('circle',{r:60,fill:col,...halo},g); n.glow = el('circle',{r:60,fill:col,filter:'url(#soft)',opacity:0},g);
+    el('circle',{r:56,fill:'none',stroke:col,'stroke-opacity':.55,'stroke-width':1.5,'stroke-dasharray':'2 9',class:'ring'},g);
+    el('circle',{r:44,fill:'#151a24',stroke:col,'stroke-width':2,class:'body'},g);
+    n.flash = el('circle',{r:44,fill:'none',stroke:col,'stroke-width':3,opacity:0},g);
+    const who = n.who ?? K.ui.who; n.tWho = txt(g,{y:-6,'text-anchor':'middle',fill:col,'font-size':15,'font-weight':K.dir==='rtl'?700:800,direction:bidi(who)},who);
+    n.q = txt(g,{y:16,'text-anchor':'middle',fill:'#e8eefb','font-size':12,direction:K.dir},K.ui.waiting);
+    n.tName = txt(g,{y:74,'text-anchor':'middle',fill:'#e8eefb','font-size':15,'font-weight':700,direction:bidi(n.label)},n.label);
+    n.tNote = txt(g,{y:92,'text-anchor':'middle',fill:'#b7a77f','font-size':13,'font-family':MONO,direction:bidi(n.sub||'')},n.sub||'');
+  } else {
+    const [w,h] = SIZE[n.kind], stroke = n.kind==='review' ? '#dfe7f7' : col;
+    const shape = a => n.kind==='review' ? el('path',{d:HEX,...a},g) : el('rect',{x:-w/2,y:-h/2,width:w,height:h,rx:n.kind==='channel'?28:14,...a},g);
+    n.halo = shape({fill:n.kind==='review'?TINT:col,...halo}); n.glow = shape({fill:n.kind==='review'?TINT:col,filter:'url(#soft)',opacity:0}); shape({fill:'#0f1829',stroke,'stroke-width':1.5,class:'body'});
+    n.tLabel = txt(g,{y:-4,'text-anchor':'middle',fill:'#e8eefb','font-size':15,'font-weight':700,direction:bidi(n.label)},n.label);
+    n.tSub = txt(g,{y:16,'text-anchor':'middle',fill:'#8b98b3','font-size':13,'font-family':MONO,direction:bidi(n.sub||'')},n.sub||'');
+    if (st) el('circle',{cx:(n.kind==='review'?74:w/2)-12,cy:-h/2+12,r:4,fill:st[1]},g);
+    if (n.badge) { const b = el('g',{transform:'translate(0,-48)'},g); el('rect',{x:-58,y:-10,width:116,height:20,rx:10,fill:'#151d2e',stroke:'#3a4a6a'},b);
+      n.tBadge = txt(b,{y:4,'text-anchor':'middle',fill:'#dfe7f7','font-size':12,'font-family':MONO,direction:bidi(n.badge)},n.badge); }
+  }
+  Object.assign(n,{heat:0,queue:[],next:3+Math.random()*3});
+});
+const jRing = el('circle',{r:0,fill:'none',stroke:'#fff','stroke-width':2,opacity:0},front);
+
+// Layout warnings: the map still runs, and scripts/check-map.mjs fails on them.
+function layoutWarnings(){
+  const w = [], half = n => SIZE[n.kind].map(v => v/2), inside = (n,x,y,pad=0) => { const [a,b] = half(n); return Math.abs(x-n.x)<=a+pad && Math.abs(y-n.y)<=b+pad; };
+  const fit = (t,max,what,hint='shorten it') => { if (t && t.getComputedTextLength()>max) w.push(`${what} is too wide (${Math.round(t.getComputedTextLength())} > ${max}): ${hint}`); };
+  for (const n of K.nodes) { const [a,b] = half(n), inner = n.kind==='channel'?150:160;
+    if (n.x-a<0||n.x+a>VW||n.y-b<0||n.y+b>VH) w.push(`node "${n.id}" is outside the viewBox`);
+    fit(n.tLabel,inner,`node "${n.id}" label`); fit(n.tSub,inner,`node "${n.id}" sub`,'shorten it and put the long version in "long"'); fit(n.tBadge,108,`node "${n.id}" badge`); fit(n.tWho,76,`gate "${n.id}" who`); fit(n.tName,240,`gate "${n.id}" label`); }
+  K.nodes.forEach((n,i) => K.nodes.slice(i+1).forEach(m => { const [a,b] = half(n), [c,d] = half(m); if (Math.abs(n.x-m.x)<a+c && Math.abs(n.y-m.y)<b+d) w.push(`nodes "${n.id}" and "${m.id}" overlap`); }));
+  for (const n of K.nodes) for (const t of [n.tName,n.tNote]) { if (!t||!t.textContent) continue; const r = t.getBBox(), x = r.x+n.x, y = r.y+n.y;
+    if (x<0||y+r.height>VH||x+r.width>VW) w.push(`gate "${n.id}" text "${t.textContent.slice(0,32)}" is outside the viewBox`);
+    for (const m of K.nodes) { if (m===n) continue; const [a,b] = half(m); if (x<m.x+a&&x+r.width>m.x-a&&y<m.y+b&&y+r.height>m.y-b) w.push(`gate "${n.id}" text "${t.textContent.slice(0,32)}" sits on node "${m.id}"`); } }
+  for (const e of E) { const A = N[e.a], B = N[e.b], L = e.n-1;
+    if (!inside(A,e.pts[0],e.pts[1],1)) w.push(`edge ${e.a} -> ${e.b} does not start inside "${e.a}"`);
+    if (!inside(B,e.pts[L*2],e.pts[L*2+1],1)) w.push(`edge ${e.a} -> ${e.b} does not end inside "${e.b}"`);
+    for (const n of K.nodes) { if (n===A||n===B) continue; for (let i=0;i<e.n;i++) if (inside(n,e.pts[i*2],e.pts[i*2+1],-6)) { w.push(`edge ${e.a} -> ${e.b} runs under node "${n.id}": give it a custom d`); break; } } }
+  for (const t of free) { if (!t.textContent) continue; const r = t.getBBox(); for (const n of K.nodes) { const [a,b] = half(n);
+    if (r.x<n.x+a && r.x+r.width>n.x-a && r.y<n.y+b && r.y+r.height>n.y-b) w.push(`text "${t.textContent.slice(0,32)}" sits on node "${n.id}"`); } }
+  const seen = new Set(api.sources), stack = [...api.sources];
+  while (stack.length) { const id = stack.pop(); for (const e of E) if (e.a===id && !seen.has(e.b)) { seen.add(e.b); stack.push(e.b); } }
+  for (const n of K.nodes) if (!seen.has(n.id)) w.push(`node "${n.id}" cannot be reached from spawnFrom`);
+  return w;
+}
+api.layout = layoutWarnings; api.warnings = layoutWarnings(); api.warnings.forEach(m => console.warn('[flow-map] '+m));
+
+const statusUsed = Object.keys(K.status||{}).filter(k => K.nodes.some(n => n.st===k));
+$('legend').innerHTML = (K.legend||[]).map(([g,s]) => `<span><i style="background:${esc(C[g])}"></i>${esc(s)}</span>`).join('') + statusUsed.map(k => `<span><b style="background:${esc(K.status[k][1])}"></b>${esc(K.status[k][0])}</span>`).join('');
+$('listT').textContent = K.ui.list; $('swipe').textContent = K.ui.swipe;
+$('list').innerHTML = K.nodes.map(n => { const s = K.status&&K.status[n.st], to = [...new Set(E.filter(e => e.a===n.id && e.kind!=='back').map(e => N[e.b].label))];
+  return `<li><strong>${esc(n.label)}</strong>${s?` (${esc(s[0])})`:''}${n.kind==='gate'?` · ${esc(n.who ?? K.ui.who)}`:''}${n.cost?` · ${esc(n.cost)}`:''}${n.badge?` · ${esc(n.badge)}`:''}<p>${esc(n.long||n.sub||'')}</p>${(n.li||[]).map(x => `<p>${esc(x)}</p>`).join('')}${to.length?`<p>${esc(K.ui.next)}: ${esc(to.join(', '))}</p>`:''}${n.back?`<p>${esc(K.ui.sendsBack)}: ${esc(N[n.back].label)}</p>`:''}${n.files?`<div class="files" dir="ltr">${esc(n.files)}</div>`:''}</li>`; }).join('');
+
+// tooltip
+const tip = $('tip'); let pinned = null, hideT = 0;
+const reveal = () => { const b = tip.getBoundingClientRect().bottom; if (b>innerHeight) scrollBy(0,b-innerHeight+8); };
+const cancelHide = () => clearTimeout(hideT), hideSoon = () => { cancelHide(); hideT = setTimeout(() => { if (!pinned) hide(); }, 140); };
+function mark(n){ for (const m of K.nodes) { m.g.classList.toggle('on', m===n); if (m===n) m.g.setAttribute('aria-describedby','tip'); else m.g.removeAttribute('aria-describedby'); } }
+function show(n){ const s = K.status&&K.status[n.st]; tip.dir = K.dir; tip.style.setProperty('--tc', n.group==='review' ? TINT : C[n.group]);
+  tip.innerHTML = `<div class="ttl">${esc(n.label)}</div><div class="sub" dir="${bidi(n.long||n.sub||'')}">${esc(n.long||n.sub||'')}</div>${s?`<span class="pill" style="color:${esc(s[1])}">${esc(s[0])}</span>`:''}${n.cost?` <span class="pill" style="color:#a6b3cc">${esc(n.cost)}</span>`:''}<ul>${(n.li||[]).map(x=>`<li>${esc(x)}</li>`).join('')}</ul>${n.files?`<div class="files" dir="ltr">${esc(n.files)}</div>`:''}`;
+  const sc = stage.clientWidth/VW, tw = Math.min(330, scroller.clientWidth-24), fr = scroller.getBoundingClientRect(), sr = stage.getBoundingClientRect();
+  const minL = Math.max(12, fr.left-sr.left+12), maxL = Math.min(stage.clientWidth, fr.right-sr.left)-tw-12; // stay inside the visible part of the frame
+  const left = Math.max(minL, Math.min(maxL, n.x*sc-tw/2)); let top = (n.y+(n.kind==='gate'?104:56))*sc+8; // below a gate's label, not on it
+  tip.style.maxHeight = Math.max(stage.clientHeight-8-top, (n.y-56)*sc-16, 120)+'px'; // use the larger side, so a long tooltip never covers its own node
+  tip.style.width = tw+'px'; tip.style.left = left+'px'; tip.style.top = '0px'; tip.classList.add('show'); const th = tip.offsetHeight;
+  if (top+th > stage.clientHeight-8) top = (n.y-56)*sc-th-8; tip.style.top = Math.max(8,top)+'px'; mark(n); }
+function hide(){ tip.classList.remove('show'); mark(null); }
+for (const n of K.nodes) { const g = n.g;
+  g.addEventListener('mouseenter',()=>{ cancelHide(); if(!pinned) show(n); }); g.addEventListener('mouseleave',()=>{ if(!pinned) hideSoon(); });
+  g.addEventListener('focus',()=>{ cancelHide(); if(pinned&&pinned!==n) pinned=null; const kb = g.matches(':focus-visible'); if (kb&&overflowing()) centre(n.x,false); show(n); if (kb) reveal(); }); g.addEventListener('blur',()=>{ if(!pinned) hideSoon(); });
+  g.addEventListener('click',ev=>{ ev.stopPropagation(); cancelHide(); if (pinned===n){pinned=null;hide();} else {pinned=n;show(n);reveal();} });
+  g.addEventListener('keydown',ev=>{ if(ev.key==='Enter'||ev.key===' '){ev.preventDefault();g.dispatchEvent(new MouseEvent('click'));} }); }
+tip.addEventListener('focusin',cancelHide); tip.addEventListener('focusout',()=>{ if(!pinned) hideSoon(); }); tip.addEventListener('mouseenter',cancelHide); tip.addEventListener('mouseleave',()=>{ if(!pinned) hideSoon(); });
+document.addEventListener('click',ev=>{ if(!tip.contains(ev.target)){pinned=null;hide();} });
+document.addEventListener('keydown',ev=>{ if(ev.key==='Escape'){pinned=null;cancelHide();hide();} });
+
+// particles
+const cv = $('fx'), ctx = cv.getContext('2d'); let scale = 1, dpr = 1, dirty = true, idle = 0;
+const resize = () => { dpr = Math.min(2, devicePixelRatio||1); cv.width = Math.round(stage.clientWidth*dpr); cv.height = Math.round(stage.clientHeight*dpr); scale = stage.clientWidth/VW; dirty = true; $('swipe').hidden = scroller.scrollWidth <= scroller.clientWidth+1; };
+new ResizeObserver(resize).observe(stage); resize();
+const P = [], MQ = matchMedia('(prefers-reduced-motion: reduce)'); let speed = 1, paused = false, clock = 0, J = null;
+const pos = (e,t) => { t = Math.max(0,Math.min(1,t)); const f = t*(e.n-1), i = Math.floor(f), r = f-i, j = Math.min(e.n-1,i+1); return [e.pts[i*2]+(e.pts[j*2]-e.pts[i*2])*r, e.pts[i*2+1]+(e.pts[j*2+1]-e.pts[i*2+1])*r]; };
+const launch = (p,e) => { p.e = e; p.t = 0; p.v = (e.kind==='feed'?150:e.kind==='back'?120:95)*(0.8+Math.random()*0.45); };
+const pick = l => { let r = Math.random()*l.reduce((s,e)=>s+e.w,0); for (const e of l){ r-=e.w; if (r<=0) return e; } return l[l.length-1]; };
+const auxFrom = id => { const l = E.filter(e => e.a===id && e.kind==='aux' && live(e)); return l[Math.floor(Math.random()*l.length)]; };
+const send = (p,n) => { const o = outs(n.id); if (o.length) return launch(p,pick(o)); p.dead = true; S.dead[n.id] = (S.dead[n.id]||0)+1; };
+function arrive(p){ const n = N[p.e.b]; n.heat = Math.min(1.4, n.heat+.5);
+  if (p.journey) return jArrive(p,n);
+  if (p.retire) { p.dead = true; return; }
+  S.entered[n.id] = (S.entered[n.id]||0)+1;
+  if (n.kind==='sat') { const r = E.find(e => e.kind==='aux' && e.a===n.id && e.b===p.e.a); if (r) return launch(p,r); }
+  if (n.kind==='gate') { n.queue.push(p); p.held = true; return; }
+  if (n.backEdge && live(n.backEdge) && Math.random() < n.pb) { S.sent[n.id] = (S.sent[n.id]||0)+1; return launch(p, n.backEdge); }
+  if (p.e.kind!=='aux' && Math.random()<.5) { const a = auxFrom(n.id); if (a) return launch(p,a); }
+  send(p,n); }
+const say = n => `<strong>${esc(n.label)}</strong> <span>· ${esc((K.say||{})[n.id] || n.sub || '')}</span>`;
+const cap = $('capText'), caption = $('caption'); cap.innerHTML = `<span>${esc(K.ui.hint)}</span>`;
+const overflowing = () => scroller.scrollWidth > scroller.clientWidth+1;
+const centre = (x,smooth) => scroller.scrollTo({left:x*scale-scroller.clientWidth/2, behavior:smooth&&!MQ.matches?'smooth':'auto'});
+function startJ(user){ if (!K.journey) return; if (J) J.dead = true; J = {journey:true, step:0, wait:0, follow:user}; caption.setAttribute('aria-live', user?'polite':'off'); // only announce a tour the reader asked for
+  const a = K.journey[0], b = K.journey[1]; cap.innerHTML = say(N[a]); launch(J, edge(a,b)); J.v = 120; if (paused) toggle(); if (user && overflowing()) centre((N[a].x+N[b].x)/2,true); }
+function jArrive(p,n){ p.step++; cap.innerHTML = say(n);
+  if (p.step >= K.journey.length-1) { p.dead = true; J = null; S.journeys++; setTimeout(()=>{ if(!J) cap.innerHTML = `<span>${esc(K.ui.done)}</span>`; }, 1800); return; }
+  p.wait = n.kind==='gate' ? 2.2 : n.kind==='review' ? 1.1 : .55; if (n.flash) n.flash.setAttribute('opacity',1);
+  const next = N[K.journey[p.step+1]]; launch(p, edge(n.id,next.id)); p.v = 120; if (p.follow && overflowing()) centre((n.x+next.x)/2,true); }
+for (const ev of ['wheel','touchstart','pointerdown','focusin']) scroller.addEventListener(ev,()=>{ if (J) J.follow = false; },{passive:true}); // the reader took the wheel
+let sp = 0;
+function spawn(){ // at the cap the oldest moving particle retires at its next stop, so loops can never starve new work
+  if (P.length<K.cap) { const p = {}; launch(p, pick(outs(pick(SRC).id))); P.push(p); S.spawned++; return; }
+  if (P.filter(p => p.retire).length<4) { const old = P.find(p => !p.held && !p.retire); if (old) old.retire = true; } }
+function step(dt){ let i; sp += dt; if (sp>.55) { sp = 0; spawn(); }
+  for (const p of P) { if (p.held||p.dead) continue; p.t += p.v*dt/p.e.len; if (p.t>=1) arrive(p); }
+  for (i=P.length-1;i>=0;i--) if (P[i].dead) P.splice(i,1);
+  for (const n of K.nodes) if (n.kind==='gate') { n.next -= dt;
+    if (n.next<=0) { n.next = 4.5+Math.random()*3.5; if (n.queue.length) { n.flash.setAttribute('opacity',1); n.heat = 1.4; const go = n.queue.splice(0, n.batch||n.queue.length); S.released += go.length; S.releasedBy[n.id] = (S.releasedBy[n.id]||0)+go.length;
+      go.forEach((p,i)=>{ p.held=false; send(p,n); p.t = -i*.06; }); } }
+    const q = n.queue.length ? `${K.ui.waiting}: ${n.queue.length}` : K.ui.open; if (n.qt!==q) n.q.textContent = n.qt = q; }
+  if (J && !J.dead) { if (J.wait>0) J.wait -= dt; else { J.t += J.v*dt/J.e.len; if (J.t>=1) arrive(J); } } }
+function draw(dt){
+  for (const n of K.nodes) { const k = dt||.016;
+    if (n.heat>.01) { n.heat *= Math.pow(.25,k); n.glow.setAttribute('opacity',Math.min(.85,n.heat*.6).toFixed(2)); } else if (n.heat) { n.heat = 0; n.glow.setAttribute('opacity',0); }
+    if (n.flash) { const o = +n.flash.getAttribute('opacity'); if (o>.01) { n.flash.setAttribute('opacity',(o*Math.pow(.15,k)).toFixed(3)); n.flash.setAttribute('r',44+(1-o)*18); } } }
+  ctx.setTransform(1,0,0,1,0,0); ctx.clearRect(0,0,cv.width,cv.height); ctx.setTransform(scale*dpr,0,0,scale*dpr,0,0); ctx.globalCompositeOperation = 'lighter';
+  for (const p of P) { if (p.t<0||p.dead) continue; const col = p.held ? C[N[p.e.b].group] : p.e.col; let x,y;
+    if (p.held) { const n = N[p.e.b], a = clock*.9 + n.queue.indexOf(p)*.7; x = n.x+Math.cos(a)*62; y = n.y+Math.sin(a)*62; }
+    else { [x,y] = pos(p.e,p.t); for (let i=1;i<6;i++){ const [tx,ty] = pos(p.e,p.t-i*7/p.e.len); ctx.globalAlpha=.22*(1-i/6); ctx.fillStyle=col; ctx.beginPath(); ctx.arc(tx,ty,2.6-i*.3,0,7); ctx.fill(); } }
+    ctx.fillStyle=col; ctx.globalAlpha=.28; ctx.beginPath(); ctx.arc(x,y,7,0,7); ctx.fill(); ctx.globalAlpha=1; ctx.beginPath(); ctx.arc(x,y,2.6,0,7); ctx.fill(); }
+  if (J && !J.dead && J.t>=0) { const [x,y] = pos(J.e,J.t);
+    for (let i=1;i<14;i++){ const [tx,ty] = pos(J.e,J.t-i*6/J.e.len); ctx.globalAlpha=.35*(1-i/14); ctx.fillStyle='#fff'; ctx.beginPath(); ctx.arc(tx,ty,4.5-i*.25,0,7); ctx.fill(); }
+    const g = ctx.createRadialGradient(x,y,0,x,y,26); g.addColorStop(0,'rgba(255,255,255,.95)'); g.addColorStop(.25,'rgba(255,240,200,.5)'); g.addColorStop(1,'rgba(255,195,92,0)');
+    ctx.globalAlpha=1; ctx.fillStyle=g; ctx.beginPath(); ctx.arc(x,y,26,0,7); ctx.fill();
+    const tn = N[J.e.a]; if (J.wait>0) { jRing.setAttribute('cx',tn.x); jRing.setAttribute('cy',tn.y); jRing.setAttribute('r',tn.kind==='gate'?64:96); jRing.setAttribute('opacity',.5); jRing.setAttribute('stroke',tn.kind==='gate'?C[tn.group]:'#fff'); } else jRing.setAttribute('opacity',0);
+  } else jRing.setAttribute('opacity',0);
+  ctx.globalAlpha=1; ctx.globalCompositeOperation='source-over'; }
+let last = performance.now();
+function frame(now){ let dt = Math.max(0,Math.min(.05,(now-last)/1000)); last = now; S.frames++;
+  idle = paused ? idle+1 : 0; if (paused) dt = 0; dt *= speed; clock += dt;
+  if (dt>0) step(dt);
+  if (idle<90 || dirty) { dirty = false; draw(dt); } // once paused and settled, stop repainting an identical frame
+  requestAnimationFrame(frame); }
+const bJ = $('bJ'), bP = $('bP'), bS = $('bS');
+bJ.textContent = K.ui.follow; bP.textContent = K.ui.pause; bS.textContent = K.ui.speed+'1'; if (!K.journey) bJ.hidden = true;
+function toggle(){ paused = !paused; stage.classList.toggle('paused',paused); bP.textContent = paused ? K.ui.play : K.ui.pause; }
+bP.onclick = toggle; bS.onclick = () => { speed = speed===1?2:speed===2?.5:1; bS.textContent = K.ui.speed+speed; };
+bJ.onclick = () => startJ(true);
+const FLOW = E.filter(e => e.kind==='flow' && live(e)); for (let i=0;i<Math.min(46,K.cap-6)&&FLOW.length;i++){ const p={}; launch(p, FLOW[i%FLOW.length]); p.t = Math.random(); P.push(p); }
+if (overflowing()) centre(N[SRC[0].id].x,false); // a phone opens where the work starts, wherever that is on the grid
+api.openedAt = N[SRC[0].id].x*scale - scroller.scrollLeft; api.openedWidth = scroller.clientWidth;
+api.live = () => P.filter(p => !p.dead && p.t>=0).length; api.speed = () => speed;
+MQ.addEventListener('change',e => { if (e.matches && !paused) toggle(); });
+if (MQ.matches) toggle(); else if (!overflowing()) setTimeout(()=>{ if(!J && !paused) startJ(false); }, 1400); // a tour nobody can see would only burn the caption
+api.ready = true;
+requestAnimationFrame(frame);
+})();
+</script>
+<script>
+/* ================= SELF-CHECK: needs only a browser. Open this file with #check, or call await livingFlowMap.selfCheck() ================= */
+(() => {
+'use strict';
+const api = window.livingFlowMap; if (!api) return;
+const S = api.stats, $ = id => document.getElementById(id), sleep = ms => new Promise(r => setTimeout(r, ms)), sum = o => Object.values(o).reduce((a,b) => a+b, 0);
+const until = async (test,ms) => { const end = Date.now()+ms; while (Date.now()<end) { if (test()) return true; await sleep(50); } return false; };
+const RTL = /[֐-ࣿיִ-﷿ﹰ-﻿]/, MIN_FPS = 5; // below this the animation is not really running and a verdict would mean nothing
+const HIDDEN = 'The animation is not running at a usable speed, usually because this tab is hidden or the browser is not drawing it. Keep the tab in front and reload.';
+const liveGates = () => { const todo = id => CONFIG.nodes.find(n => n.id===id).st==='todo'; return CONFIG.nodes.filter(n => n.kind==='gate' && n.st!=='todo' && CONFIG.edges.some(e => e[1]===n.id && e[2]!=='back' && !todo(e[0]))); };
+
+function checkTraffic(check,base){
+  const todo = new Set(CONFIG.nodes.filter(n => n.st==='todo').map(n => n.id)), d = (group,id) => (S[group][id]||0)-(base[group][id]||0);
+  const liveAux = id => CONFIG.edges.some(e => e[2]==='aux' && e[0]===id && !todo.has(e[1])), fedByFlow = id => CONFIG.edges.some(e => e[1]===id && (e[2]==='flow'||e[2]==='feed'));
+  check(S.frames-base.frames>60, 'animation frames ran', `${S.frames-base.frames} frames`);
+  const arrivals = sum(S.entered)-sum(base.entered); check(arrivals>20, 'particles reached nodes', `${arrivals} arrivals`);
+  for (const n of liveGates()) check(d('releasedBy',n.id)>0, `gate "${n.id}" released queued work`, `${d('releasedBy',n.id)} released`);
+  for (const n of CONFIG.nodes) {
+    if (n.kind==='sat' && !todo.has(n.id) && liveAux(n.id)) check(d('entered',n.id)>0 && (fedByFlow(n.id) || !d('dead',n.id)), `particles visit and return from side system "${n.id}"`, `${d('entered',n.id)} visited, ${d('dead',n.id)} died there`);
+    if (todo.has(n.id)) check(!S.entered[n.id], `no live traffic into not-built node "${n.id}"`, `${S.entered[n.id]||0} arrivals`);
+    const visits = d('entered',n.id); // only assert a send-back when missing one could not be chance
+    if (n.back && !todo.has(n.id) && !todo.has(n.back) && (1-n.pb)**visits<.001) check(d('sent',n.id)>0, `review "${n.id}" sends work back`, `${d('sent',n.id)} of ${visits} visits`);
+  }
+}
+
+async function runTour(check,skip,scroller,sc,wide){
+  const cap = $('capText'), seen = [], before = S.journeys, maxL = scroller.scrollWidth-scroller.clientWidth, J = CONFIG.journey;
+  const X = id => CONFIG.nodes.find(n => n.id===id).x, later = J.slice(1,-1).map((id,i) => Math.max(0,Math.min(maxL,(X(id)+X(J[i+2]))/2*sc-scroller.clientWidth/2)));
+  scroller.scrollLeft = 0; api.setSpeed(wide?4:6); $('bJ').click();
+  const first = cap.innerHTML; // sample after the first hop: the opening centre move proves nothing
+  check(await until(() => { if (cap.innerHTML!==first) seen.push(scroller.scrollLeft); return S.journeys>before; },60000), 'follow-one-item tour reached the end');
+  const expected = later.length ? Math.max(...later)-Math.min(...later) : 0, moved = seen.length ? Math.max(...seen)-Math.min(...seen) : 0;
+  if (wide && expected>80) check(moved>expected*.5, 'phone tour scrolls with the comet', `moved ${Math.round(moved)}px of ${Math.round(expected)}px expected`);
+  else if (wide) skip('phone tour scrolls with the comet','this route has no sideways distance to follow');
+}
+
+async function checkControls(check,skip){
+  const tip = $('tip'), g = document.querySelector('.n'), c = $('fx'), anims = () => document.getAnimations().filter(a => a.playState==='running' && a.animationName).length, before = anims();
+  $('bP').click(); api.setSpeed(1); await sleep(300);
+  const shot = c.toDataURL(), entered = JSON.stringify(S.entered); await sleep(1200);
+  check(c.toDataURL()===shot && JSON.stringify(S.entered)===entered, 'Pause stops particles');
+  if (before>0) check(anims()===0, 'Pause stops CSS animation', `${anims()} of ${before} still running`); else skip('Pause stops CSS animation','no CSS animation is running, as with reduced motion');
+  $('bP').click();
+  if (!document.hasFocus()) { skip('keyboard focus shows and links the details','this frame does not have focus: click into the page and run again'); skip('Escape dismisses the details','needs the same focus'); return; }
+  g.focus(); await sleep(250);
+  check(tip.classList.contains('show') && tip.textContent.length>0 && getComputedStyle(tip).visibility==='visible' && g.getAttribute('aria-describedby')==='tip', 'keyboard focus shows and links the details');
+  document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape'})); await sleep(50);
+  check(!tip.classList.contains('show'), 'Escape dismisses the details');
+  g.blur();
+}
+
+async function checkTooltips(check,scroller,sc){
+  const tip = $('tip'), f = scroller.getBoundingClientRect(), nodes = [...document.querySelectorAll('.n')], bad = [];
+  for (const [i,n] of CONFIG.nodes.entries()) {
+    scroller.scrollLeft = n.x*sc-scroller.clientWidth+40; // node hard against the right edge of the frame
+    nodes[i].dispatchEvent(new MouseEvent('click',{bubbles:true})); await sleep(30);
+    const t = tip.getBoundingClientRect(), past = Math.max(Math.round(t.right-f.right),Math.round(f.left-t.left),0);
+    if (!tip.classList.contains('show')) bad.push(`${n.id} not shown`); else if (past>0) bad.push(`${n.id} ${past}px`);
+    nodes[i].dispatchEvent(new MouseEvent('click',{bubbles:true}));
+  }
+  check(nodes.length>0 && !bad.length, 'tooltips show and stay inside the frame', `${nodes.length} nodes tried${bad.length?`; bad: ${bad.join(', ')}`:''}`);
+}
+
+async function checkPicture(check,skip){
+  const c = $('fx'), d = c.getContext('2d').getImageData(0,0,c.width,c.height).data, live = api.live(); let lit = 0; for (let i=3;i<d.length;i+=4) if (d[i]) lit++;
+  check(live>0 && lit>live*40, 'canvas shows particles', `${lit} lit pixels for ${live} particles`); // about 40 px each even when they overlap
+  const rtl = [...document.querySelectorAll('#front text, #back text')].filter(t => RTL.test(t.textContent)), wrong = rtl.filter(t => getComputedStyle(t).direction!=='rtl').map(t => t.textContent.slice(0,24));
+  if (rtl.length) check(!wrong.length, 'right-to-left text has the right direction', wrong.join(' | ')); else skip('right-to-left text has the right direction','this map has no right-to-left text');
+}
+
+async function body(check,skip,scroller,sc,wide,base){
+  const over = document.documentElement.scrollWidth-innerWidth; check(over<=0, 'page has no sideways scroll', `${over}px`);
+  if (wide && scroller.clientWidth===api.openedWidth) check(api.openedAt>0 && api.openedAt<scroller.clientWidth, 'phone opens on the first stage', `first node at ${Math.round(api.openedAt)}px of ${scroller.clientWidth}px`);
+  else if (wide) skip('phone opens on the first stage','the width changed since this page loaded: reload at this width to test it');
+  if (CONFIG.journey) await runTour(check,skip,scroller,sc,wide);
+  api.setSpeed(6); await until(() => liveGates().every(n => (S.releasedBy[n.id]||0)>(base.releasedBy[n.id]||0)),30000); await sleep(4000);
+  checkTraffic(check,base);
+  const spawned = S.spawned; await sleep(3000); check(S.spawned>spawned, 'new work keeps entering after the map fills', `${S.spawned-spawned} spawned in the last 3 s`);
+  await checkPicture(check,skip);
+  await checkControls(check,skip);
+  await checkTooltips(check,scroller,sc);
+  if (location.protocol==='file:') { const ext = performance.getEntriesByType('resource').map(e => e.name).filter(u => !/^(file|data|blob):/.test(u)); check(!ext.length, 'no network requests', ext.slice(0,3).join(' | ')); }
+  else skip('no network requests','only measurable when the file is opened directly');
+  check(!window.__flowErrors.length, 'no script errors', window.__flowErrors.slice(0,3).join(' | '));
+}
+
+async function run(){
+  const out = [], check = (ok,name,detail='') => out.push({ok:!!ok,name,detail}), skip = (name,detail) => out.push({ok:true,skipped:true,name,detail});
+  const finish = (status,reason='') => ({status:status||(out.some(r => !r.ok)?'fail':'pass'),reason,results:out});
+  if (!api.ready && !api.errors.length) { check(false,'engine started',window.__flowErrors[0]||'the engine stopped before it finished starting'); return finish(); }
+  check(!api.errors.length, 'CONFIG has no errors', api.errors.join(' | ')); if (api.errors.length) return finish();
+  if (document.fonts) await document.fonts.ready;
+  api.warnings = api.layout(); check(!api.warnings.length, 'layout has no warnings', api.warnings.join(' | '));
+  const t0 = Date.now(), f0 = S.frames; await sleep(700);
+  if (document.hidden || S.frames-f0<MIN_FPS*.7) return finish('not-run',HIDDEN);
+  let wentHidden = false; const onVis = () => { if (document.hidden) wentHidden = true; }; document.addEventListener('visibilitychange',onVis);
+  const scroller = $('scroller'), sc = $('stage').clientWidth/CONFIG.view[0], wide = scroller.scrollWidth>scroller.clientWidth+1, bP = $('bP'), wasPaused = bP.textContent===CONFIG.ui.play;
+  const keep = {left:scroller.scrollLeft, x:scrollX, y:scrollY, speed:api.speed(), caption:$('capText').innerHTML}, base = JSON.parse(JSON.stringify(S));
+  if (wasPaused) bP.click();
+  try { await body(check,skip,scroller,sc,wide,base); }
+  catch (err) { check(false,'self-check finished',err.message); }
+  finally {
+    document.removeEventListener('visibilitychange',onVis); api.setSpeed(keep.speed); scroller.scrollLeft = keep.left; scrollTo(keep.x,keep.y);
+    $('capText').innerHTML = keep.caption; $('caption').setAttribute('aria-live','off');
+    if ((bP.textContent===CONFIG.ui.play)!==wasPaused) bP.click();
+  }
+  if (wentHidden || (S.frames-f0)/((Date.now()-t0)/1000)<MIN_FPS) return finish('not-run',HIDDEN);
+  return finish();
+}
+let inFlight = null;
+api.selfCheck = () => inFlight || (inFlight = run().finally(() => { inFlight = null; })); // one run at a time: two would fight over Pause and speed
+
+const baseTitle = document.title;
+async function showReport(){
+  const box = $('selfCheck'); box.hidden = false; box.textContent = 'Running the map self-check, usually about 30 seconds. Keep this tab in front.';
+  const r = await api.selfCheck(), ran = r.results.filter(x => !x.skipped), failed = ran.filter(x => !x.ok).length, skipped = r.results.length-ran.length, list = document.createElement('ul');
+  const head = document.createElement('strong'); head.textContent = r.status==='not-run' ? `NOT RUN: ${r.reason}` : `${r.status==='pass'?'PASS':'FAIL'}: ${ran.length-failed} of ${ran.length} checks passed${skipped?`, ${skipped} skipped`:''} at ${innerWidth} px wide`;
+  for (const x of r.results) { const li = document.createElement('li'); li.textContent = `${x.skipped?'SKIP':x.ok?'PASS':'FAIL'}  ${x.name}${x.detail?`  (${x.detail})`:''}`; if (!x.ok) li.className = 'no'; list.appendChild(li); }
+  box.replaceChildren(head,list); document.title = `${r.status.toUpperCase()} - ${baseTitle}`; scrollTo(0,0);
+}
+if (location.hash==='#check') showReport();
+})();
+</script></body></html>
