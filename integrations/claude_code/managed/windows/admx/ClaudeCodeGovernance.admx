@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Group Policy template for the Claude Code managed settings registry value.
+  Writes the whole managed settings JSON (minified, one line) as the REG_SZ value
+  "Settings" under HKLM\Software\Policies\ClaudeCode, the location the vendor documents
+  at https://code.claude.com/docs/en/managed-settings.md ("Windows HKLM registry").
+  Copy this file to the PolicyDefinitions folder of the central store and the .adml to its
+  en-US subfolder. If the JSON is longer than the editor accepts, deploy the same value with
+  a Group Policy Preferences registry item instead (see README.md).
+-->
+<policyDefinitions xmlns:xsd="http://www.w3.org/2001/XMLSchema"
+                   xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                   revision="1.0" schemaVersion="1.0"
+                   xmlns="http://schemas.microsoft.com/GroupPolicy/2006/07/PolicyDefinitions">
+  <policyNamespaces>
+    <target prefix="aigovclaudecode" namespace="Corp.Policies.AIGovernance.ClaudeCode" />
+    <using prefix="windows" namespace="Microsoft.Policies.Windows" />
+  </policyNamespaces>
+  <resources minRequiredRevision="1.0" />
+  <categories>
+    <category name="AIGovernance" displayName="$(string.AIGovernance)" />
+  </categories>
+  <policies>
+    <policy name="ClaudeCodeManagedSettings" class="Machine"
+            displayName="$(string.ClaudeCodeManagedSettings)"
+            explainText="$(string.ClaudeCodeManagedSettings_Help)"
+            presentation="$(presentation.ClaudeCodeManagedSettings)"
+            key="Software\Policies\ClaudeCode">
+      <parentCategory ref="AIGovernance" />
+      <supportedOn ref="windows:SUPPORTED_Windows10" />
+      <elements>
+        <text id="SettingsJson" key="Software\Policies\ClaudeCode" valueName="Settings"
+              required="true" maxLength="32000" expandable="false" />
+      </elements>
+    </policy>
+  </policies>
+</policyDefinitions>

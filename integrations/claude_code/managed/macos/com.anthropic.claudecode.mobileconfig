@@ -1,0 +1,134 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>PayloadContent</key>
+	<array>
+		<dict>
+			<key>PayloadDisplayName</key>
+			<string>Claude Code managed settings</string>
+			<key>PayloadIdentifier</key>
+			<string>com.corp.aigovernance.claudecode.settings</string>
+			<key>PayloadType</key>
+			<string>com.anthropic.claudecode</string>
+			<key>PayloadUUID</key>
+			<string>F9764E3A-D2F6-5499-9B57-5F12140612D4</string>
+			<key>PayloadVersion</key>
+			<integer>1</integer>
+			<key>allowManagedHooksOnly</key>
+			<true/>
+			<key>allowManagedPermissionRulesOnly</key>
+			<true/>
+			<key>allowedProviders</key>
+			<array>
+				<string>anthropic</string>
+			</array>
+			<key>companyAnnouncements</key>
+			<array>
+				<string>AI activity in Claude Code on this machine is checked and recorded by the company AI-governance service. Refused actions show a decision id; quote it when you contact the security team.</string>
+			</array>
+			<key>disableCommandPluginSources</key>
+			<true/>
+			<key>disableSideloadFlags</key>
+			<true/>
+			<key>enabledPlugins</key>
+			<dict>
+				<key>ai-governance@corp-ai-governance</key>
+				<true/>
+			</dict>
+			<key>env</key>
+			<dict>
+				<key>AIGOV_DECIDE_TIMEOUT_SECONDS</key>
+				<string>8</string>
+				<key>AIGOV_DEVICE_TOKEN_FILE</key>
+				<string>/Library/Application Support/AIGovernance/device-token</string>
+				<key>AIGOV_REPORT_TIMEOUT_SECONDS</key>
+				<string>1</string>
+				<key>AIGOV_SERVICE_URL</key>
+				<string>https://REPLACE_ME_SERVICE_HOST</string>
+				<key>AIGOV_SURFACE</key>
+				<string>cli</string>
+				<key>CLAUDE_CODE_SYNC_PLUGIN_INSTALL</key>
+				<string>1</string>
+			</dict>
+			<key>extraKnownMarketplaces</key>
+			<dict>
+				<key>corp-ai-governance</key>
+				<dict>
+					<key>autoUpdate</key>
+					<true/>
+					<key>source</key>
+					<dict>
+						<key>source</key>
+						<string>git</string>
+						<key>url</key>
+						<string>https://REPLACE_ME_MARKETPLACE_GIT_URL</string>
+					</dict>
+				</dict>
+			</dict>
+			<key>forceLoginMethod</key>
+			<string>claudeai</string>
+			<key>forceLoginOrgUUID</key>
+			<array>
+				<string>REPLACE_ME_ORG_UUID</string>
+			</array>
+			<key>permissions</key>
+			<dict>
+				<key>deny</key>
+				<array>
+					<string>Read(~/.ssh/**)</string>
+					<string>Read(~/.aws/credentials)</string>
+					<string>Read(~/.azure/**)</string>
+					<string>Read(~/.config/gcloud/**)</string>
+					<string>Read(~/.kube/config)</string>
+					<string>Read(~/.docker/config.json)</string>
+					<string>Read(~/.netrc)</string>
+					<string>Read(~/.git-credentials)</string>
+					<string>Read(~/.npmrc)</string>
+					<string>Read(~/.pypirc)</string>
+					<string>Read(~/.gnupg/**)</string>
+					<string>Read(//**/.env)</string>
+					<string>Read(//**/.env.*)</string>
+					<string>Read(//**/*.pem)</string>
+					<string>Read(//**/*.key)</string>
+					<string>Read(//**/id_rsa*)</string>
+					<string>Read(//**/id_ed25519*)</string>
+					<string>Edit(~/.claude/settings.json)</string>
+					<string>Edit(~/.claude/plugins/**)</string>
+					<string>Read(//Library/Application Support/AIGovernance/**)</string>
+					<string>Edit(//Library/Application Support/AIGovernance/**)</string>
+				</array>
+				<key>disableBypassPermissionsMode</key>
+				<string>disable</string>
+			</dict>
+			<key>requiredMinimumVersion</key>
+			<string>2.1.316</string>
+			<key>strictKnownMarketplaces</key>
+			<array>
+				<dict>
+					<key>source</key>
+					<string>git</string>
+					<key>url</key>
+					<string>https://REPLACE_ME_MARKETPLACE_GIT_URL</string>
+				</dict>
+			</array>
+		</dict>
+	</array>
+	<key>PayloadDescription</key>
+	<string>Claude Code policy enforced by the company AI-governance programme.</string>
+	<key>PayloadDisplayName</key>
+	<string>Company AI governance: Claude Code</string>
+	<key>PayloadIdentifier</key>
+	<string>com.corp.aigovernance.claudecode</string>
+	<key>PayloadRemovalDisallowed</key>
+	<true/>
+	<key>PayloadScope</key>
+	<string>System</string>
+	<key>PayloadType</key>
+	<string>Configuration</string>
+	<key>PayloadUUID</key>
+	<string>FF8476C0-8357-57AE-8A7B-D8877F05C7B2</string>
+	<key>PayloadVersion</key>
+	<integer>1</integer>
+</dict>
+</plist>

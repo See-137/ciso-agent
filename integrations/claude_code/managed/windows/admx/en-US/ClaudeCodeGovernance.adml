@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<policyDefinitionResources xmlns:xsd="http://www.w3.org/2001/XMLSchema"
+                           xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                           revision="1.0" schemaVersion="1.0"
+                           xmlns="http://schemas.microsoft.com/GroupPolicy/2006/07/PolicyDefinitions">
+  <displayName>Company AI governance: Claude Code</displayName>
+  <description>Managed settings for Claude Code, enforced by the company AI-governance programme.</description>
+  <resources>
+    <stringTable>
+      <string id="AIGovernance">Company AI governance</string>
+      <string id="ClaudeCodeManagedSettings">Claude Code managed settings (JSON)</string>
+      <string id="ClaudeCodeManagedSettings_Help">Writes the Claude Code managed settings JSON to HKLM\Software\Policies\ClaudeCode\Settings (REG_SZ). Paste the minified content of windows/managed-settings.json from the AI-governance policy pack after check_pack.py reports READY. Disabling or not configuring this policy removes the value, which turns the company controls off on the machine: keep it Enabled.</string>
+    </stringTable>
+    <presentationTable>
+      <presentation id="ClaudeCodeManagedSettings">
+        <textBox refId="SettingsJson">
+          <label>Managed settings JSON (one line):</label>
+        </textBox>
+      </presentation>
+    </presentationTable>
+  </resources>
+</policyDefinitionResources>

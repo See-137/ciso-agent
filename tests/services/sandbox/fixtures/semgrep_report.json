@@ -1,0 +1,36 @@
+{
+  "version": "1.95.0",
+  "results": [
+    {
+      "check_id": "python.lang.security.audit.eval-detected.eval-detected",
+      "path": "app/handler.py",
+      "start": {"line": 14, "col": 5, "offset": 301},
+      "end": {"line": 14, "col": 22, "offset": 318},
+      "extra": {
+        "message": "Detected the use of eval(). eval() can be dangerous if used to evaluate dynamic content.",
+        "metadata": {"category": "security", "cwe": ["CWE-95"]},
+        "severity": "WARNING",
+        "fingerprint": "requires login",
+        "lines": "requires login",
+        "is_ignored": false,
+        "engine_kind": "OSS"
+      }
+    },
+    {
+      "check_id": "python.lang.security.dangerous-subprocess-use",
+      "path": "app/run.py",
+      "start": {"line": 2, "col": 1, "offset": 10},
+      "end": {"line": 2, "col": 30, "offset": 39},
+      "extra": {
+        "message": "Detected subprocess function with argument tainted by input.",
+        "metadata": {},
+        "severity": "ERROR",
+        "fingerprint": "requires login",
+        "lines": "requires login"
+      }
+    }
+  ],
+  "errors": [],
+  "paths": {"scanned": ["app/handler.py", "app/run.py"]},
+  "skipped_rules": []
+}

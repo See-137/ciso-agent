@@ -1,0 +1,42 @@
+[
+  {
+    "RuleID": "generic-api-key",
+    "Description": "Detected a Generic API Key, potentially exposing access to various services and sensitive operations.",
+    "StartLine": 3,
+    "EndLine": 3,
+    "StartColumn": 12,
+    "EndColumn": 52,
+    "Match": "api_key = \"REDACTED\"",
+    "Secret": "REDACTED",
+    "File": "app/config.py",
+    "SymlinkFile": "",
+    "Commit": "",
+    "Entropy": 4.3,
+    "Author": "",
+    "Email": "",
+    "Date": "",
+    "Message": "",
+    "Tags": [],
+    "Fingerprint": "app/config.py:generic-api-key:3"
+  },
+  {
+    "RuleID": "aws-access-token",
+    "Description": "Identified a pattern that may indicate AWS credentials.",
+    "StartLine": 1,
+    "EndLine": 1,
+    "StartColumn": 1,
+    "EndColumn": 20,
+    "Match": "REDACTED",
+    "Secret": "REDACTED",
+    "File": "/work/src/deploy/env.sh",
+    "SymlinkFile": "",
+    "Commit": "0123456789abcdef0123456789abcdef01234567",
+    "Entropy": 3.9,
+    "Author": "dev",
+    "Email": "dev@example.invalid",
+    "Date": "2026-11-18T10:00:00Z",
+    "Message": "add deploy script",
+    "Tags": [],
+    "Fingerprint": "0123456789abcdef0123456789abcdef01234567:deploy/env.sh:aws-access-token:1"
+  }
+]

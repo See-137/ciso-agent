@@ -1,0 +1,14 @@
+{
+  "name": "corp-ai-governance",
+  "description": "The company's governed plugins for Claude Code",
+  "owner": {
+    "name": "Company security team"
+  },
+  "plugins": [
+    {
+      "name": "ai-governance",
+      "source": "./plugin",
+      "description": "Company AI governance hooks and advisory skill"
+    }
+  ]
+}

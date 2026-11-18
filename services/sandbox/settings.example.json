@@ -1,0 +1,27 @@
+{
+  "_comment": "Example only. Every limit and image is null (unset), so the service refuses every job until the owner fills them in. The token is read from the environment variable named in token_env; never put a token value in this file.",
+  "host": "127.0.0.1",
+  "port": 8790,
+  "token_env": "CISO_SANDBOX_TOKEN",
+  "settings": {
+    "docker_cli": null,
+    "limits": {
+      "wall_time_seconds": null,
+      "cpus": null,
+      "memory_bytes": null,
+      "output_bytes": null,
+      "pids": null,
+      "work_tmpfs_bytes": null
+    },
+    "images": {
+      "python_tests": null,
+      "node_tests": null,
+      "go_tests": null,
+      "gitleaks": null,
+      "semgrep": null,
+      "git": null,
+      "semgrep_config": null,
+      "gitleaks_config": null
+    }
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "name": "ai-governance",
+  "displayName": "Company AI governance",
+  "version": "0.1.0",
+  "description": "Sends every agent action to the company AI-governance service before it runs and applies the answer (allow, deny, ask). Carries the advisory skill that explains the rules.",
+  "author": {
+    "name": "Company security team"
+  },
+  "license": "UNLICENSED",
+  "keywords": ["governance", "security", "audit"]
+}

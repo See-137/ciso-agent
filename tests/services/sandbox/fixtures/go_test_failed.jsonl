@@ -1,0 +1,13 @@
+{"Time":"2026-11-18T10:00:00.000000Z","Action":"start","Package":"example.invalid/app"}
+{"Time":"2026-11-18T10:00:00.001000Z","Action":"run","Package":"example.invalid/app","Test":"TestAdd"}
+{"Time":"2026-11-18T10:00:00.001100Z","Action":"output","Package":"example.invalid/app","Test":"TestAdd","Output":"=== RUN   TestAdd\n"}
+{"Time":"2026-11-18T10:00:00.001200Z","Action":"pass","Package":"example.invalid/app","Test":"TestAdd","Elapsed":0}
+{"Time":"2026-11-18T10:00:00.001300Z","Action":"run","Package":"example.invalid/app","Test":"TestSub"}
+{"Time":"2026-11-18T10:00:00.001400Z","Action":"fail","Package":"example.invalid/app","Test":"TestSub","Elapsed":0}
+{"Time":"2026-11-18T10:00:00.001500Z","Action":"run","Package":"example.invalid/app","Test":"TestLater"}
+{"Time":"2026-11-18T10:00:00.001600Z","Action":"skip","Package":"example.invalid/app","Test":"TestLater","Elapsed":0}
+{"Time":"2026-11-18T10:00:00.001700Z","Action":"output","Package":"example.invalid/app","Output":"FAIL\n"}
+{"Time":"2026-11-18T10:00:00.001800Z","Action":"fail","Package":"example.invalid/app","Elapsed":0.002}
+{"Time":"2026-11-18T10:00:00.002000Z","Action":"start","Package":"example.invalid/broken"}
+{"Time":"2026-11-18T10:00:00.002100Z","Action":"output","Package":"example.invalid/broken","Output":"FAIL\texample.invalid/broken [build failed]\n"}
+{"Time":"2026-11-18T10:00:00.002200Z","Action":"fail","Package":"example.invalid/broken","Elapsed":0,"FailedBuild":"example.invalid/broken"}

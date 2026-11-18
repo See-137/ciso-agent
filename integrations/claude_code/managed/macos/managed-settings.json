@@ -1,0 +1,69 @@
+{
+  "forceLoginMethod": "claudeai",
+  "forceLoginOrgUUID": [
+    "REPLACE_ME_ORG_UUID"
+  ],
+  "allowedProviders": [
+    "anthropic"
+  ],
+  "requiredMinimumVersion": "2.1.316",
+  "allowManagedHooksOnly": true,
+  "disableCommandPluginSources": true,
+  "allowManagedPermissionRulesOnly": true,
+  "disableSideloadFlags": true,
+  "strictKnownMarketplaces": [
+    {
+      "source": "git",
+      "url": "https://REPLACE_ME_MARKETPLACE_GIT_URL"
+    }
+  ],
+  "extraKnownMarketplaces": {
+    "corp-ai-governance": {
+      "source": {
+        "source": "git",
+        "url": "https://REPLACE_ME_MARKETPLACE_GIT_URL"
+      },
+      "autoUpdate": true
+    }
+  },
+  "enabledPlugins": {
+    "ai-governance@corp-ai-governance": true
+  },
+  "permissions": {
+    "disableBypassPermissionsMode": "disable",
+    "deny": [
+      "Read(~/.ssh/**)",
+      "Read(~/.aws/credentials)",
+      "Read(~/.azure/**)",
+      "Read(~/.config/gcloud/**)",
+      "Read(~/.kube/config)",
+      "Read(~/.docker/config.json)",
+      "Read(~/.netrc)",
+      "Read(~/.git-credentials)",
+      "Read(~/.npmrc)",
+      "Read(~/.pypirc)",
+      "Read(~/.gnupg/**)",
+      "Read(//**/.env)",
+      "Read(//**/.env.*)",
+      "Read(//**/*.pem)",
+      "Read(//**/*.key)",
+      "Read(//**/id_rsa*)",
+      "Read(//**/id_ed25519*)",
+      "Edit(~/.claude/settings.json)",
+      "Edit(~/.claude/plugins/**)",
+      "Read(//Library/Application Support/AIGovernance/**)",
+      "Edit(//Library/Application Support/AIGovernance/**)"
+    ]
+  },
+  "env": {
+    "AIGOV_SERVICE_URL": "https://REPLACE_ME_SERVICE_HOST",
+    "AIGOV_DECIDE_TIMEOUT_SECONDS": "8",
+    "AIGOV_REPORT_TIMEOUT_SECONDS": "1",
+    "AIGOV_SURFACE": "cli",
+    "CLAUDE_CODE_SYNC_PLUGIN_INSTALL": "1",
+    "AIGOV_DEVICE_TOKEN_FILE": "/Library/Application Support/AIGovernance/device-token"
+  },
+  "companyAnnouncements": [
+    "AI activity in Claude Code on this machine is checked and recorded by the company AI-governance service. Refused actions show a decision id; quote it when you contact the security team."
+  ]
+}
