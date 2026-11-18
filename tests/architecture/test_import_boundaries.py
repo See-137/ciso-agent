@@ -87,6 +87,15 @@ ALLOWED_INTERNAL: dict[str, dict[str, str]] = {
     },
     "ciso.identity": {"ciso.common": _COMMON},
     "ciso.vault": {"ciso.common": _COMMON},
+    # AI-activity governance (docs/skill/spec-draft.md). Each judges or records what other
+    # people's agents do, so no model output may steer it.
+    "ciso.agents": {"ciso.common": _COMMON},
+    "ciso.governance": {"ciso.common": _COMMON},
+    "ciso.inspection": {
+        "ciso.common": _COMMON,
+        "ciso.vault": "secret detection reuses the vault's token-shape patterns",
+    },
+    "ciso.findings": {"ciso.common": _COMMON},
     # Not a trust root, but the one path that can leave the building (blueprint 8.4).
     "ciso.inference.external": {
         "ciso.common": _COMMON,
@@ -528,7 +537,7 @@ def test_the_allowlist_is_closed() -> None:
     for package in sorted(TRUST_ROOTS):
         for target in ALLOWED_INTERNAL[package]:
             assert target in TRUST_ROOTS, f"{package} may import {target}, which has no allowlist"
-    assert len(TRUST_ROOTS) == 9
+    assert len(TRUST_ROOTS) == 13
 
 
 def test_every_top_level_package_has_a_rule(tree: tuple[Source, ...]) -> None:
