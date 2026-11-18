@@ -182,7 +182,7 @@ class TestTheCheckerItself:
         assert forbidden_report(sources, "ciso.execution") == (1, [])
 
     def test_a_package_with_no_rule_is_seen(self, tmp_path: Path) -> None:
-        sources = _planted(tmp_path, "ciso.agents.x", "from ciso.inference import gateway\n")
+        sources = _planted(tmp_path, "ciso.unregistered.x", "from ciso.inference import gateway\n")
         assert unclassified_packages(sources) == ["ciso.unregistered"]
         assert unclassified_packages(_planted(tmp_path / "b", "ciso.policy.x", "")) == []
 
