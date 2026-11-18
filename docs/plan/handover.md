@@ -20,7 +20,7 @@ which described a stop in the middle of M1.
 | `uv run ruff check src tests`, `ruff format --check` | clean |
 | Disabled-guard search in `src/` | none |
 | Hand mutations, one guard switched off at a time | 5 of 5 caught and restored: kill-switch outbox MAC, policy `agent_requestable`, API scoped permissions, inference nominal provider, audit rollback behind the witness |
-| Fresh clone with `uv sync --locked` | see the commit message of the M1 commit and the line added below after it ran |
+| Fresh clone of commit `0a0188b` with `uv sync --locked` | 1349 passed, 1 skipped, 3 xfailed; mypy and ruff clean; no `data/` directory created |
 
 The skip is the connector write-method check (no `ciso.connectors` yet). The three
 expected failures are placeholders for test classes that arrive with later milestones
