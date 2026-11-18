@@ -20,7 +20,7 @@ FORBIDDEN: dict[str, frozenset[str]] = {
     "ciso.common": frozenset(
         {
             "ciso.audit",
-            "ciso.secrets",
+            "ciso.vault",
             "ciso.identity",
             "ciso.killswitch",
             "ciso.policy",
@@ -53,7 +53,7 @@ FORBIDDEN: dict[str, frozenset[str]] = {
     "ciso.audit": frozenset({"ciso.inference", "ciso.orchestrator", "ciso.api"}),
     "ciso.killswitch": frozenset({"ciso.inference", "ciso.orchestrator", "ciso.api"}),
     "ciso.identity": frozenset({"ciso.inference", "ciso.orchestrator", "ciso.api"}),
-    "ciso.secrets": frozenset({"ciso.inference", "ciso.orchestrator", "ciso.api"}),
+    "ciso.vault": frozenset({"ciso.inference", "ciso.orchestrator", "ciso.api"}),
     "ciso.inference": frozenset(
         {"ciso.execution", "ciso.connectors", "ciso.write_adapters", "ciso.api"}
     ),
@@ -128,15 +128,40 @@ def _modules() -> Iterator[tuple[str, Path]]:
         yield ".".join(parts), path
 
 
-def _imports(path: Path) -> set[str]:
+def _module_name(path: Path) -> tuple[str, bool]:
+    """Dotted name of a source file and whether it is a package `__init__`."""
+    try:
+        relative = path.resolve().relative_to(SRC.parent).with_suffix("")
+    except ValueError:
+        return path.stem, False
+    parts = list(relative.parts)
+    if parts[-1] == "__init__":
+        return ".".join(parts[:-1]), True
+    return ".".join(parts), False
+
+
+def _imports(path: Path, module: str | None = None, is_package: bool = False) -> set[str]:
+    """Absolute dotted names a file imports. Relative imports are resolved first, so
+    `from ..inference import gateway` cannot slip past a rule written with absolute names.
+    """
+    if module is None:
+        module, is_package = _module_name(path)
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    package_parts = module.split(".") if is_package else module.split(".")[:-1]
     found: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             found.update(alias.name for alias in node.names)
-        elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
-            found.add(node.module)
-            found.update(f"{node.module}.{alias.name}" for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            if node.level == 0:
+                base = node.module or ""
+            else:
+                keep = len(package_parts) - (node.level - 1)
+                anchor = package_parts[: max(keep, 0)]
+                base = ".".join([*anchor, node.module] if node.module else anchor)
+            if base:
+                found.add(base)
+            found.update(f"{base}.{alias.name}" if base else alias.name for alias in node.names)
     return found
 
 
@@ -231,19 +256,23 @@ def test_no_dynamic_code_or_shell_execution() -> None:
 
 
 def test_read_connectors_define_no_write_methods() -> None:
+    """No file under ciso.connectors is exempt. Write adapters live in ciso.write_adapters,
+    a separate package that connectors may not import.
+    """
     connectors = SRC / "connectors"
     if not connectors.exists():
         pytest.skip("ciso.connectors is not built yet")
+    scanned = 0
     violations: list[str] = []
     for path in sorted(connectors.rglob("*.py")):
-        if "write" in path.stem:
-            continue
+        scanned += 1
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for node in ast.walk(tree):
             if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and node.name.startswith(
                 WRITE_METHOD_PREFIXES
             ):
                 violations.append(f"{path.relative_to(SRC)}: {node.name}")
+    assert scanned > 0, "ciso.connectors exists but holds no Python files"
     assert not violations, "\n".join(violations)
 
 
@@ -266,3 +295,22 @@ class TestTheCheckerItself:
         assert _under("ciso.policy.engine", "ciso.policy")
         assert _under("ciso.policy", "ciso.policy")
         assert not _under("ciso.policy_extra", "ciso.policy")
+
+    def test_relative_imports_are_resolved_to_absolute_names(self, tmp_path: Path) -> None:
+        sample = tmp_path / "m.py"
+        sample.write_text(
+            "from ..inference import gateway\nfrom . import sibling\nfrom .x import y\n",
+            encoding="utf-8",
+        )
+        found = _imports(sample, module="ciso.policy.engine")
+        assert "ciso.inference" in found
+        assert "ciso.inference.gateway" in found
+        assert "ciso.policy.sibling" in found
+        assert "ciso.policy.x.y" in found
+
+    def test_relative_imports_from_a_package_init_are_resolved(self, tmp_path: Path) -> None:
+        sample = tmp_path / "__init__.py"
+        sample.write_text("from ..inference.external import gateway\n", encoding="utf-8")
+        found = _imports(sample, module="ciso.orchestrator", is_package=True)
+        assert "ciso.inference.external" in found
+        assert "ciso.inference.external.gateway" in found

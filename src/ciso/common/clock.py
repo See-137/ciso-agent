@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from typing import Protocol
 
+from ciso.common.errors import ValidationFailed
+
 
 class Clock(Protocol):
     def now(self) -> datetime:
@@ -36,5 +38,5 @@ class FixedClock:
 def ensure_utc(value: datetime) -> datetime:
     """Reject naive datetimes; normalise aware ones to UTC."""
     if value.tzinfo is None:
-        raise ValueError("naive datetime is not allowed; attach a timezone")
+        raise ValidationFailed("naive datetime is not allowed; attach a timezone")
     return value.astimezone(UTC)

@@ -6,6 +6,8 @@ ciso.audit owns by itself so that ordinary writers never hold a handle to it.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -22,7 +24,7 @@ from sqlalchemy import (
     event,
     select,
 )
-from sqlalchemy.engine import Dialect
+from sqlalchemy.engine import Connection, Dialect
 from sqlalchemy.pool import StaticPool
 from sqlalchemy.types import TypeDecorator
 
@@ -60,8 +62,20 @@ class UtcDateTime(TypeDecorator[datetime]):
         return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
 
 
+#: Execution option that marks a connection as read-only for transaction purposes.
+READ_ONLY_OPTION = "ciso_read_only"
+
+
 def create_db_engine(path: Path | str | None) -> Engine:
-    """Open a SQLite database. `None` gives a private in-memory database for tests."""
+    """Open a SQLite database. `None` gives a private in-memory database for tests.
+
+    Every transaction starts with `BEGIN IMMEDIATE`, which takes the write lock at once.
+    The driver's default is to wait until the first write, and that lets two processes
+    both pass a "does a row exist?" check and then both insert. With the lock taken up
+    front, a check followed by a write inside `engine.begin()` is serialised across
+    processes. Use `read_connection()` for work that only reads and should not queue
+    behind writers.
+    """
     if path is None:
         engine = create_engine(
             "sqlite://", poolclass=StaticPool, connect_args={"check_same_thread": False}
@@ -72,7 +86,9 @@ def create_db_engine(path: Path | str | None) -> Engine:
         engine = create_engine(f"sqlite:///{file.as_posix()}")
 
     @event.listens_for(engine, "connect")
-    def _pragmas(dbapi_connection: Any, _record: Any) -> None:
+    def _on_connect(dbapi_connection: Any, _record: Any) -> None:
+        # Hand transaction control to SQLAlchemy: the driver must not emit its own BEGIN.
+        dbapi_connection.isolation_level = None
         cursor = dbapi_connection.cursor()
         try:
             cursor.execute("PRAGMA foreign_keys=ON")
@@ -83,7 +99,26 @@ def create_db_engine(path: Path | str | None) -> Engine:
         finally:
             cursor.close()
 
+    @event.listens_for(engine, "begin")
+    def _on_begin(conn: Connection) -> None:
+        read_only = bool(conn.get_execution_options().get(READ_ONLY_OPTION, False))
+        conn.exec_driver_sql("BEGIN" if read_only else "BEGIN IMMEDIATE")
+
     return engine
+
+
+@contextmanager
+def read_connection(engine: Engine) -> Iterator[Connection]:
+    """A connection for reads only. It does not take the write lock.
+
+    Never write through it: a write here would bring back the race `BEGIN IMMEDIATE`
+    exists to prevent.
+    """
+    with engine.connect().execution_options(**{READ_ONLY_OPTION: True}) as conn:
+        try:
+            yield conn
+        finally:
+            conn.rollback()
 
 
 schema_version = Table(
@@ -107,8 +142,8 @@ def register_schema(module: str, version: int) -> None:
 def init_operational_schema(engine: Engine) -> None:
     """Create every registered operational table and record module versions.
 
-    Safe to call again. A stored version newer than the code refuses to start, because
-    this build has no downgrade path. Upgrades need a migration tool (ADR-0002, open).
+    Safe to call again. A stored version that differs from the code, older or newer,
+    refuses to start: this build has no migration path in either direction (ADR-0002).
     """
     operational_metadata.create_all(engine)
     with engine.begin() as conn:

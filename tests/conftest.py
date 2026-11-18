@@ -13,7 +13,14 @@ from typing import Any
 
 import pytest
 from sqlalchemy import Engine
-from tests.fakes.core import FakeAudit, FakeKillSwitch, FakeRedactor, FakeSecrets, make_principal
+from tests.fakes.core import (
+    FakeAudit,
+    FakeKillSwitch,
+    FakePrincipals,
+    FakeRedactor,
+    FakeSecrets,
+    make_principal,
+)
 
 from ciso.common.classification import ClassificationScheme
 from ciso.common.clock import FixedClock
@@ -159,3 +166,18 @@ def agent() -> Principal:
 @pytest.fixture
 def service() -> Principal:
     return make_principal("svc_connector", ActorType.SERVICE)
+
+
+@pytest.fixture
+def principals(
+    admin: Principal,
+    system_owner: Principal,
+    risk_owner: Principal,
+    employee: Principal,
+    auditor: Principal,
+    agent: Principal,
+    service: Principal,
+) -> FakePrincipals:
+    """Resolver that knows the standard fixture actors as they are. Remove or replace an
+    entry to simulate a revoked role or a disabled actor."""
+    return FakePrincipals(admin, system_owner, risk_owner, employee, auditor, agent, service)

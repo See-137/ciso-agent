@@ -13,7 +13,7 @@ from ciso.common.db import UtcDateTime, create_db_engine
 from ciso.common.enums import ActorType, AuthorityLevel, Role
 from ciso.common.errors import ValidationFailed
 from ciso.common.ids import EntityRef, entity_ref, is_id, new_id
-from ciso.common.principal import Principal
+from ciso.common.principal import Principal, RoleGrant
 from ciso.common.schemas import Model, UtcDatetime, canonical_json, content_hash
 
 pytestmark = pytest.mark.unit
@@ -44,9 +44,23 @@ class TestIds:
         ref = EntityRef.parse("asset:ast_123")
         assert ref == EntityRef("asset", "ast_123")
         assert str(ref) == "asset:ast_123"
-        assert entity_ref("ai_asset", "x:y") == "ai_asset:x:y"
+        assert entity_ref("ai_asset", "ai_01-a.b") == "ai_asset:ai_01-a.b"
 
-    @pytest.mark.parametrize("value", ["", "asset", ":id", "Asset:1", "asset:", "asset:a b"])
+    @pytest.mark.parametrize(
+        "value",
+        [
+            "",
+            "asset",
+            ":id",
+            "Asset:1",
+            "asset:",
+            "asset:a b",
+            "asset:x:y",
+            "asset:../etc",
+            "asset:a/b",
+            "asset:" + "a" * 129,
+        ],
+    )
     def test_bad_entity_ref_is_rejected(self, value: str) -> None:
         with pytest.raises(ValidationFailed):
             EntityRef.parse(value)
@@ -130,6 +144,85 @@ class TestPrincipal:
     ) -> None:
         with pytest.raises(ValidationError, match="cannot hold"):
             Principal(actor_id="a1", actor_type=actor_type, roles=frozenset({role}))
+
+
+class TestRoleGrants:
+    def _owner(self, *grants: RoleGrant) -> Principal:
+        return Principal(
+            actor_id="h1",
+            actor_type=ActorType.HUMAN,
+            roles=frozenset({Role.SYSTEM_OWNER}),
+            grants=grants,
+        )
+
+    def test_role_without_grant_records_is_unnarrowed(self) -> None:
+        assert self._owner().covers(Role.SYSTEM_OWNER, {"system": "app:a"})
+        assert self._owner().covers(Role.SYSTEM_OWNER, {})
+
+    def test_role_not_held_never_covers(self) -> None:
+        assert not self._owner().covers(Role.SECURITY_ADMIN, {})
+
+    def test_scoped_grant_limits_the_role(self) -> None:
+        owner = self._owner(
+            RoleGrant(role=Role.SYSTEM_OWNER, scope={"system": frozenset({"app:a"})})
+        )
+        assert owner.covers(Role.SYSTEM_OWNER, {"system": "app:a"})
+        assert not owner.covers(Role.SYSTEM_OWNER, {"system": "app:b"})
+
+    def test_missing_attribute_does_not_match_a_scoped_grant(self) -> None:
+        owner = self._owner(
+            RoleGrant(role=Role.SYSTEM_OWNER, scope={"system": frozenset({"app:a"})})
+        )
+        assert not owner.covers(Role.SYSTEM_OWNER, {})
+        assert not owner.covers(Role.SYSTEM_OWNER, {"system": None})
+        assert not owner.covers(Role.SYSTEM_OWNER, {"environment": "staging"})
+
+    def test_two_grants_do_not_mix_their_attributes(self) -> None:
+        owner = self._owner(
+            RoleGrant(
+                role=Role.SYSTEM_OWNER,
+                scope={"system": frozenset({"app:a"}), "environment": frozenset({"production"})},
+            ),
+            RoleGrant(
+                role=Role.SYSTEM_OWNER,
+                scope={"system": frozenset({"app:b"}), "environment": frozenset({"staging"})},
+            ),
+        )
+        assert owner.covers(Role.SYSTEM_OWNER, {"system": "app:a", "environment": "production"})
+        assert owner.covers(Role.SYSTEM_OWNER, {"system": "app:b", "environment": "staging"})
+        assert not owner.covers(Role.SYSTEM_OWNER, {"system": "app:a", "environment": "staging"})
+
+    def test_covering_roles_returns_only_roles_that_reach_the_target(self) -> None:
+        principal = Principal(
+            actor_id="h1",
+            actor_type=ActorType.HUMAN,
+            roles=frozenset({Role.SYSTEM_OWNER, Role.SECURITY_ADMIN}),
+            grants=(RoleGrant(role=Role.SYSTEM_OWNER, scope={"system": frozenset({"app:a"})}),),
+        )
+        wanted = {Role.SYSTEM_OWNER, Role.SECURITY_ADMIN, Role.AUDITOR}
+        assert principal.covering_roles(wanted, {"system": "app:b"}) == {Role.SECURITY_ADMIN}
+        assert principal.covering_roles(wanted, {"system": "app:a"}) == {
+            Role.SYSTEM_OWNER,
+            Role.SECURITY_ADMIN,
+        }
+
+    def test_grant_for_a_role_not_held_is_rejected(self) -> None:
+        with pytest.raises(ValidationError, match="does not hold"):
+            Principal(
+                actor_id="h1",
+                actor_type=ActorType.HUMAN,
+                roles=frozenset({Role.EMPLOYEE}),
+                grants=(RoleGrant(role=Role.SYSTEM_OWNER),),
+            )
+
+    def test_anonymous_actor_holds_nothing(self) -> None:
+        anonymous = Principal(actor_id="unauthenticated", actor_type=ActorType.ANONYMOUS)
+        assert not anonymous.is_human
+        assert anonymous.roles == frozenset()
+        with pytest.raises(ValidationError, match="anonymous"):
+            Principal(
+                actor_id="x", actor_type=ActorType.ANONYMOUS, roles=frozenset({Role.EMPLOYEE})
+            )
 
 
 class TestDb:

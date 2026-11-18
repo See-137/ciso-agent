@@ -1,0 +1,40 @@
+{
+  "_comment": "PROVISIONAL. These values exist so the platform can be exercised locally. None of them is an agreed company decision: see docs/adr/0017 (classification labels) and docs/adr/0019 (safety parameters). Replace them after Phase 0. Secrets are references to environment variables named CISO_SECRET_<NAME>; no secret value belongs in this file.",
+  "data_dir": "data",
+  "bind_host": "127.0.0.1",
+  "bind_port": 8765,
+  "classification_labels": ["public", "internal", "confidential", "restricted"],
+  "audit_hmac_key_ref": "secret://audit_hmac_key",
+  "killswitch_key_ref": "secret://killswitch_key",
+  "evidence_key_ref": "secret://evidence_key",
+  "backup_key_ref": "secret://backup_key",
+  "safety": {
+    "max_token_ttl_seconds": 43200,
+    "max_envelope_ttl_seconds": 900,
+    "approval_ttl_seconds": 3600,
+    "allow_self_approval": false,
+    "queue_lease_seconds": 300,
+    "queue_max_attempts": 5,
+    "queue_backoff_base_seconds": 5,
+    "queue_backoff_max_seconds": 600,
+    "inference_timeout_seconds": 120,
+    "inference_max_abandoned_calls": 2,
+    "audit_witness_every": 1,
+    "killswitch_claim_timeout_seconds": 300,
+    "health_check_timeout_seconds": 5,
+    "metrics_max_series_per_metric": 200,
+    "fact_freshness_seconds": 86400,
+    "fact_expiry_seconds": 604800,
+    "retirement_grace_seconds": 1209600,
+    "event_clock_skew_seconds": 300,
+    "scan_max_rate_per_second": 1,
+    "scan_max_concurrency": 1,
+    "tool_rate_limit_per_minute": 10,
+    "api_rate_limit_per_minute": 120
+  },
+  "external_inference": {
+    "enabled": false,
+    "approver_role": null,
+    "allowed_classifications": []
+  }
+}

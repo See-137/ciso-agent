@@ -9,7 +9,7 @@ from ciso.common.clock import Clock, FixedClock
 from ciso.common.enums import ActorType, KillCapability, Role
 from ciso.common.errors import FailClosed, NotFound
 from ciso.common.ids import new_id
-from ciso.common.principal import Principal
+from ciso.common.principal import Principal, RoleGrant
 from ciso.common.protocols import AuditEvent, AuditReceipt
 from ciso.common.schemas import content_hash
 
@@ -18,10 +18,10 @@ def make_principal(
     actor_id: str = "human_admin",
     actor_type: ActorType = ActorType.HUMAN,
     *roles: Role,
-    scopes: dict[str, frozenset[str]] | None = None,
+    grants: tuple[RoleGrant, ...] = (),
 ) -> Principal:
     return Principal(
-        actor_id=actor_id, actor_type=actor_type, roles=frozenset(roles), scopes=scopes or {}
+        actor_id=actor_id, actor_type=actor_type, roles=frozenset(roles), grants=grants
     )
 
 
@@ -49,6 +49,28 @@ class FakeAudit:
 
     def find(self, action: str) -> list[AuditEvent]:
         return [event for event in self.events if event.action == action]
+
+
+class FakePrincipals:
+    """A `PrincipalResolver` over an in-memory set. Unregistered actors resolve to None."""
+
+    def __init__(self, *principals: Principal) -> None:
+        self._known: dict[str, Principal] = {p.actor_id: p for p in principals}
+        self.broken = False
+        self.lookups: list[str] = []
+
+    def register(self, principal: Principal) -> Principal:
+        self._known[principal.actor_id] = principal
+        return principal
+
+    def remove(self, actor_id: str) -> None:
+        self._known.pop(actor_id, None)
+
+    def resolve(self, actor_id: str) -> Principal | None:
+        self.lookups.append(actor_id)
+        if self.broken:
+            raise FailClosed("identity store unavailable")
+        return self._known.get(actor_id)
 
 
 class FakeKillSwitch:

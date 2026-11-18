@@ -7,8 +7,12 @@ class CisoError(Exception):
     """Base for every error this platform raises on purpose."""
 
 
-class ValidationFailed(CisoError):
-    """Input did not match its schema or a stated invariant."""
+class ValidationFailed(CisoError, ValueError):
+    """Input did not match its schema or a stated invariant.
+
+    Also a `ValueError`, so a Pydantic validator that raises it reports a normal
+    validation error, and callers can catch one type for every bad-input case.
+    """
 
 
 class NotFound(CisoError):

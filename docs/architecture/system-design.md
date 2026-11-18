@@ -70,7 +70,7 @@ Not built, on purpose (BP §1.2, §20):
 Import rules (a test parses the source tree and fails on a violation):
 
 1. `ciso.policy`, `ciso.execution`, `ciso.audit`, `ciso.killswitch`, `ciso.identity`,
-   `ciso.secrets` never import `ciso.inference` or `ciso.orchestrator`.
+   `ciso.vault` never import `ciso.inference` or `ciso.orchestrator`.
 2. `ciso.inference` never imports `ciso.execution` or `ciso.connectors`.
 3. Network client libraries (`socket`, `http.client`, `urllib.request`, `httpx`,
    `requests`, `aiohttp`) may be imported only in an allowlist of modules. In this build
@@ -127,7 +127,7 @@ SHA-256 over the canonical JSON of the record plus `prev_hash`. Own database fil
 abort UPDATE and DELETE. The log object has no delete or update method. If an append fails,
 the caller must treat the operation as not allowed (used by the broker).
 
-### secrets
+### vault (secrets interface)
 `SecretStore.get(ref) -> SecretValue` where `ref` is `secret://<name>`. `SecretValue` hides
 itself in `repr`/`str` and is not serialisable. Dev provider reads process environment
 variables with a fixed prefix; nothing is written to disk by this repo. `Redactor` scrubs
@@ -240,7 +240,8 @@ default.
 Two SQLite files in development: `data/ciso.db` (operational) and `data/audit.db` (audit
 only). Evidence blobs under `data/evidence/`. `data/` is git-ignored. SQLAlchemy Core keeps
 the SQL portable to PostgreSQL; the choice of production database stays open (ADR-0002).
-Schema is created by versioned migration scripts kept in the repo.
+Schema is created from each module's table definitions; a `schema_version(module, version)` row
+is kept per module and a mismatch refuses to start. No migration tool is chosen (ADR-0002).
 
 ## 7. Reliability
 
@@ -264,3 +265,37 @@ row counts. No performance targets are set (BP §15.1).
 
 OD-01 to OD-18 from BP §20 are tracked in `docs/adr/open-decisions.md`. Each ADR lists the
 evidence needed to close it.
+
+## 10. Revisions after plan review (2026-11-17)
+
+The planner checked this design against the blueprint and found 33 gaps
+(`docs/plan/implementation-plan.md` section 1). `docs/plan/decisions.md` records which were
+accepted. Where the sections above disagree with the list below, the list below is right.
+
+- Approvals are their own package, `ciso.approvals`, used by both the execution broker and
+  the external inference gateway. An approval binds to the subject hash, the approver
+  role, the scope and an expiry, is single-use, and is re-validated when it is checked
+  (a role revoked after approval makes it invalid).
+- The external inference gateway is its own package, `ciso.inference.external`. Only the
+  API router a human calls and the composition root may import it; a test enforces this.
+  Its approval binds payload hash, provider, model, purpose and request id.
+- The audit log adds an HMAC-keyed head anchor stored outside the audit database, so tail
+  truncation and a full recompute of the chain are detected.
+- Executions have explicit states including `unknown_outcome`; the attempt is audited
+  before the side effect; in-flight executions at restart must be verified before a retry.
+- New modules: `ciso.memory` (governed, versioned knowledge; agent writes wait for human
+  review), `ciso.ai_registry` (employee AI, product AI and the CISO's own model, kept
+  separate), `ciso.observability`, `ciso.reporting`, `ciso.employee` (report record only),
+  `ciso.ops` (backup, restore, lifecycle), `ciso.write_adapters` (contract only).
+- Classification labels are configuration (`ClassificationScheme`), not an enum.
+- A tenant reference is carried on source facts, evidence metadata and findings, and
+  filtered on at evidence access.
+- Connectors register an approved scope; a record outside it is rejected, audited and
+  shown in connector health. Events are deduplicated on `(source_system, event_id)`.
+- Data-flow order is: payload, `evidence.put`, event envelope with `payload_ref`, queue,
+  `registry.ingest` with `evidence_ref`.
+- `Environment` has `customer_owned`, which is never scannable.
+- Numeric safety parameters have no defaults; unset means the feature refuses.
+- No console is built. The API and its OpenAPI document are the interface.
+- The API has an in-process rate limiter.
+

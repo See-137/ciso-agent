@@ -72,6 +72,9 @@ class ActorType(StrEnum):
     HUMAN = "human"
     SERVICE = "service"
     AGENT = "agent"
+    #: A caller that has not been authenticated. Used in audit records of refused
+    #: sign-ins; an anonymous actor never holds a role.
+    ANONYMOUS = "anonymous"
 
 
 class Role(StrEnum):
@@ -88,6 +91,12 @@ class Role(StrEnum):
 HUMAN_ONLY_ROLES: frozenset[Role] = frozenset(
     {Role.SECURITY_ADMIN, Role.SYSTEM_OWNER, Role.EXECUTIVE_RISK_OWNER, Role.AUDITOR}
 )
+
+
+#: Roles that may decide an approval (blueprint 9.3). The administrator configures the
+#: platform and may request, but does not approve; the auditor is read-only. Provisional
+#: until the owner confirms the routing (ADR-0021).
+APPROVER_ROLES: frozenset[Role] = frozenset({Role.SYSTEM_OWNER, Role.EXECUTIVE_RISK_OWNER})
 
 
 class KillCapability(StrEnum):

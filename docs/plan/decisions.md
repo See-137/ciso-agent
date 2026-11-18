@@ -29,6 +29,10 @@ Accepted with a change:
   (`AuditEvent`, `AuditReceipt`, `AuditSink`, `KillSwitchReader`, `SecretResolver`,
   `Redactor`). `PolicyContext` and `PreconditionChecker` belong to `ciso.policy` and
   `ciso.execution`, which define them.
+- The secrets interface package is `ciso.vault` (tests in `tests/vault/`), not
+  `ciso.secrets`. The owner's tooling denies writes under any directory named `secrets`,
+  and the name would also shadow the standard library module. Plan row T1.3 paths change
+  accordingly.
 - Tests use `--import-mode=importlib` with the repo root on `pythonpath`, so helpers are
   imported as `from tests.fakes.core import ...`. Test directories have no `__init__.py`.
 - The architecture rules are in one file, `tests/architecture/test_import_boundaries.py`,

@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "prompts": [
+    {
+      "id": "stub",
+      "version": 1,
+      "file": "stub_v1.txt",
+      "sha256": "cb546244b8015dd8bbef0a18ce5ec1dada604754a8241d62cd3b394fb7ccec57"
+    }
+  ],
+  "models": [
+    {
+      "id": "stub-local",
+      "version": "1",
+      "sha256": "73cd0f890bd7ca6ef7dd2c1d9279bee44687c24e3b5010cb4049eeafb28d4fc0",
+      "source": "builtin"
+    }
+  ]
+}

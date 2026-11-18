@@ -29,12 +29,7 @@ REQUIRED = (
 #: test then fails if the class is empty. This tuple must be empty at the M6 gate.
 NOT_YET_BUILT: tuple[str, ...] = (
     "connector",
-    "policy",
     "adversarial",
-    "external_inference",
-    "broker",
-    "privacy",
-    "resilience",
     "discovery_safety",
 )
 

@@ -11,6 +11,7 @@ from typing import Any, Protocol, runtime_checkable
 from pydantic import Field
 
 from ciso.common.enums import ActorType, AuditOutcome, KillCapability
+from ciso.common.principal import Principal
 from ciso.common.schemas import Model, UtcDatetime
 
 
@@ -74,4 +75,18 @@ class Redactor(Protocol):
 
     def redact_value(self, value: Any) -> Any:
         """Same, applied through nested dicts, lists and strings. Returns a new value."""
+        ...
+
+
+@runtime_checkable
+class PrincipalResolver(Protocol):
+    def resolve(self, actor_id: str) -> Principal | None:
+        """The actor as the identity store sees it NOW, or None if unknown or disabled.
+
+        A `Principal` object is only a snapshot: it can be stale (the role was revoked
+        since) or simply made up by the caller. Any component that makes a privilege
+        decision must call this with the actor id and decide on the result, never on the
+        object it was handed. A resolver that cannot answer raises; callers treat that as
+        a refusal.
+        """
         ...

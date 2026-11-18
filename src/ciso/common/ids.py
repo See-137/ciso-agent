@@ -2,7 +2,10 @@
 
 Ids are `<prefix>_<26 chars>`: 48 bits of milliseconds then 80 random bits, Crockford
 base32, so they sort by creation time. An EntityRef is `<kind>:<id>` and is how one record
-points at another across modules.
+points at another across modules. Exactly one colon is allowed and the id half is limited
+to letters, digits, `_`, `.` and `-`, so a reference cannot smuggle a second reference or a
+path. External identifiers (a source system's own ids) are not EntityRefs; they are stored
+as `source_record_id` values.
 """
 
 from __future__ import annotations
@@ -18,6 +21,7 @@ _ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 _PREFIX_RE = re.compile(r"^[a-z][a-z0-9]{1,11}$")
 _ID_RE = re.compile(r"^[a-z][a-z0-9]{1,11}_[0-9A-HJKMNP-TV-Z]{26}$")
 _KIND_RE = re.compile(r"^[a-z][a-z0-9_]{1,31}$")
+_REF_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 
 
 def _encode(value: int, length: int) -> str:
@@ -50,9 +54,10 @@ class EntityRef(NamedTuple):
 
     @classmethod
     def parse(cls, value: str) -> EntityRef:
-        kind, sep, ident = value.partition(":")
-        if not sep or not _KIND_RE.match(kind) or not ident or any(c.isspace() for c in ident):
+        parts = value.split(":")
+        if len(parts) != 2 or not _KIND_RE.match(parts[0]) or not _REF_ID_RE.match(parts[1]):
             raise ValidationFailed(f"bad entity ref: {value!r}")
+        kind, ident = parts
         return cls(kind, ident)
 
 
