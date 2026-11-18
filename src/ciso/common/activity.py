@@ -18,10 +18,11 @@ Rules that hold for every field here:
 
 from __future__ import annotations
 
+import unicodedata
 from enum import StrEnum
 from typing import Annotated, Protocol, runtime_checkable
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import AfterValidator, Field, field_validator, model_validator
 
 from ciso.common.enums import InformationState
 from ciso.common.schemas import FrozenMap, Model, UtcDatetime
@@ -35,7 +36,23 @@ MAX_ENTRIES = 16
 #: Most findings carried by one inspection result.
 MAX_FINDINGS = 200
 
-Text = Annotated[str, Field(max_length=MAX_FIELD_CHARS)]
+
+def clean_text(value: str) -> str:
+    """Refuse control, format and line-separator characters and untrimmed text.
+
+    These records end up in the audit log and in messages shown to people; a newline or a
+    direction override in a field could forge a line or hide text.
+    """
+    if value != value.strip():
+        raise ValueError("text must not start or end with whitespace")
+    for ch in value:
+        if unicodedata.category(ch) in {"Cc", "Cf", "Zl", "Zp"}:
+            raise ValueError("text must not contain control or format characters")
+    return value
+
+
+#: Bounded, clean text. Empty is allowed; fields that must not be empty say so.
+Text = Annotated[str, Field(max_length=MAX_FIELD_CHARS), AfterValidator(clean_text)]
 
 
 class AgentClass(StrEnum):
@@ -115,12 +132,15 @@ class ObservedAction(Model):
     identity_claims: Annotated[tuple[IdentityClaim, ...], Field(max_length=MAX_ENTRIES)] = ()
     #: Where the action lands: `repository`, `branch`, `path`, `server`, `host`, `remote`.
     target: FrozenMap[str, str] = Field(default_factory=dict)
-    command: Annotated[str, Field(max_length=MAX_COMMAND_CHARS)] | None = None
+    #: Already redacted by the intake. Kept out of `repr` all the same.
+    command: Annotated[str, Field(max_length=MAX_COMMAND_CHARS)] | None = Field(
+        default=None, repr=False
+    )
     command_truncated: bool = False
     content_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")] | None = None
     content_bytes: Annotated[int, Field(ge=0)] | None = None
     #: An evidence reference when the source supplied content worth keeping (encrypted).
-    evidence_ref: Text | None = None
+    evidence_ref: Text | None = Field(default=None, repr=False)
 
     @model_validator(mode="after")
     def _bounded_target(self) -> ObservedAction:
@@ -129,6 +149,8 @@ class ObservedAction(Model):
         for key, value in self.target.items():
             if not key or len(key) > 64 or len(value) > MAX_FIELD_CHARS:
                 raise ValueError("target attributes must be short strings")
+            clean_text(key)
+            clean_text(value)
         return self
 
 
@@ -185,7 +207,9 @@ class InspectionInput(Model):
     action_id: Text
     kind: ActionKind
     path: Text = ""
-    command: Annotated[str, Field(max_length=MAX_COMMAND_CHARS, repr=False)] | None = None
+    command: Annotated[str, Field(max_length=MAX_COMMAND_CHARS)] | None = Field(
+        default=None, repr=False
+    )
     content: str | None = Field(default=None, repr=False)
 
 
