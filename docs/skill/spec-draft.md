@@ -112,10 +112,19 @@ runs; that is why step 4 exists. The inside of a connector's own server is not v
 
 ## 9. To verify in the real environment before depending on it
 
-1. UNVERIFIED: whether a hook that times out blocks the action or lets it through. Two
-   pages of the documentation disagree. The layer must fail safe.
-2. UNVERIFIED: how the person's identity reaches the hook. The hook's documented input has
-   a session id, not a user. The central gate does deliver the user.
+1. VERIFIED 2026-11-18 (Claude Code 2.1.316, Windows, local test): a pre-action hook that
+   times out, or crashes with exit code 1, LETS THE ACTION THROUGH. The same hook with
+   `"onFailure": "block"` stops the action on timeout. A hook that exits with code 2 stops
+   it. The timed-out hook process was ended, not left running. Consequence for C1 and C2:
+   every enforcing hook must set `onFailure: "block"`, and the managed policy pack must
+   stop users from adding or changing hooks, or the control fails open.
+2. VERIFIED 2026-11-18 (same test): the pre-action hook receives `session_id`,
+   `tool_name`, `tool_input` (for a shell command: the exact command text),
+   `tool_use_id`, `prompt_id`, `permission_mode`, `cwd`, `transcript_path`. The prompt hook
+   also receives the prompt text. No field names the person or the account. Consequence:
+   the hook cannot say who the user is. On domain-joined machines the hook can read the
+   logged-in operating-system account (not yet tested), and the central gate delivers the
+   Claude account (from the documentation, not yet tested); S1 joins the two by session.
 3. UNVERIFIED: whether the central gate sees file edits, or only shell commands and
    connector calls.
 4. UNVERIFIED: that the managed settings reach every surface the company uses (terminal,
