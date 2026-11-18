@@ -96,7 +96,7 @@ class RuleMatch(Model):
     @classmethod
     def _patterns(cls, value: tuple[str, ...] | None) -> tuple[str, ...] | None:
         for pattern in value or ():
-            if len(pattern) > 128 or not _PATTERN_RE.match(pattern):
+            if len(pattern) > 128 or not _PATTERN_RE.fullmatch(pattern):
                 raise ValueError(f"bad operation pattern: {pattern!r}")
         return value
 
@@ -134,7 +134,7 @@ class Rule(Model):
     @field_validator("id")
     @classmethod
     def _id(cls, value: str) -> str:
-        if not _RULE_ID_RE.match(value):
+        if not _RULE_ID_RE.fullmatch(value):
             raise ValueError(f"bad rule id: {value!r}")
         return value
 
@@ -183,7 +183,7 @@ class RuleSetDocument(Model):
     @field_validator("version")
     @classmethod
     def _version(cls, value: str) -> str:
-        if not re.match(r"^[A-Za-z0-9._-]{1,64}$", value):
+        if not re.fullmatch(r"^[A-Za-z0-9._-]{1,64}$", value):
             raise ValueError("bad ruleset version")
         return value
 
@@ -193,7 +193,7 @@ class RuleSetDocument(Model):
         if not value or len(set(value)) != len(value):
             raise ValueError("risk_classes must be a non-empty list of unique labels")
         for label in value:
-            if not _LABEL_RE.match(label):
+            if not _LABEL_RE.fullmatch(label):
                 raise ValueError(f"bad risk class: {label!r}")
         return value
 

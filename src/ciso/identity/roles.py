@@ -34,6 +34,11 @@ PERMISSIONS: Mapping[str, str] = MappingProxyType(
         "finding.update": "Change finding status, owner or remediation notes.",
         "evidence.read": "Read stored evidence objects.",
         "approval.decide": "Approve or reject an action that needs a human decision.",
+        "approval.read": "Read approval requests and what became of them.",
+        "external_inference.request": (
+            "Propose, preview, file for approval and transmit an external model request."
+        ),
+        "external_inference.read": "Read external model authorizations and transmission records.",
         "scope.approve": "Approve a discovery or test scope for systems one owns.",
         "risk.accept": "Accept business risk or grant a policy exception.",
         "report.submit": "Report an issue, ask for guidance, declare ownership or context.",
@@ -69,6 +74,9 @@ ROLE_TEMPLATES: tuple[RoleTemplate, ...] = (
                 "audit.read",
                 "registry.read",
                 "finding.read",
+                "approval.read",
+                "external_inference.request",
+                "external_inference.read",
             }
         ),
     ),
@@ -82,8 +90,11 @@ ROLE_TEMPLATES: tuple[RoleTemplate, ...] = (
                 "finding.read",
                 "finding.update",
                 "approval.decide",
+                "approval.read",
                 "scope.approve",
                 "policy.read",
+                "external_inference.request",
+                "external_inference.read",
             }
         ),
     ),
@@ -95,7 +106,14 @@ ROLE_TEMPLATES: tuple[RoleTemplate, ...] = (
             "Risk acceptance is a human business decision."
         ),
         permissions=frozenset(
-            {"risk.accept", "approval.decide", "finding.read", "registry.read", "policy.read"}
+            {
+                "risk.accept",
+                "approval.decide",
+                "approval.read",
+                "finding.read",
+                "registry.read",
+                "policy.read",
+            }
         ),
     ),
     RoleTemplate(
@@ -122,6 +140,8 @@ ROLE_TEMPLATES: tuple[RoleTemplate, ...] = (
                 "registry.read",
                 "evidence.read",
                 "killswitch.read",
+                "approval.read",
+                "external_inference.read",
             }
         ),
     ),

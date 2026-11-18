@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, Final
 
 from pydantic import Field, model_validator
 
@@ -29,6 +29,18 @@ LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
 #: Roles that may be named as the approver of an external model request (blueprint 8.4
 #: step 4). Which one is an open decision (OD-14); none is the default.
 EXTERNAL_APPROVER_ROLES = APPROVER_ROLES
+
+#: Every `Settings` field that names a cryptographic key. Each must be a `secret://`
+#: reference, and `ciso.app.readiness` checks at start-up that each one that is set
+#: resolves to a key of at least the minimum length.
+KEY_REF_FIELDS: Final = (
+    "audit_hmac_key_ref",
+    "audit_witness_key_ref",
+    "killswitch_key_ref",
+    "evidence_key_ref",
+    "backup_key_ref",
+    "external_digest_key_ref",
+)
 
 
 class SafetySettings(Model):
@@ -68,6 +80,10 @@ class SafetySettings(Model):
     tool_rate_limit_per_minute: Count | None = None
     # api
     api_rate_limit_per_minute: Count | None = None
+    # external inference (blueprint 8.4): the largest payload that may be authorized and
+    # sent, and the largest answer that is read. Unset: authorize and transmit refuse.
+    external_max_payload_bytes: Count | None = None
+    external_max_response_bytes: Count | None = None
 
     @model_validator(mode="after")
     def _consistent(self) -> SafetySettings:
@@ -122,6 +138,9 @@ class Settings(Model):
     killswitch_key_ref: str | None = None
     evidence_key_ref: str | None = None
     backup_key_ref: str | None = None
+    #: Key for the digests the external model path stores (per-item text, the answer).
+    #: Unset: item digests are unkeyed and no answer digest is kept (blueprint 8.4 step 6).
+    external_digest_key_ref: str | None = None
     safety: SafetySettings = SafetySettings()
     external_inference: ExternalInferenceSettings = ExternalInferenceSettings()
 
@@ -132,13 +151,7 @@ class Settings(Model):
                 "bind_host is not loopback; set allow_non_loopback_bind after the host and "
                 "network decision is made (OD-01, ADR-0015)"
             )
-        for name in (
-            "audit_hmac_key_ref",
-            "audit_witness_key_ref",
-            "killswitch_key_ref",
-            "evidence_key_ref",
-            "backup_key_ref",
-        ):
+        for name in KEY_REF_FIELDS:
             ref = getattr(self, name)
             if ref is not None and not ref.startswith("secret://"):
                 raise ValueError(f"{name} must be a secret:// reference, not a value")

@@ -1,8 +1,9 @@
 """Route permissions respect grant scopes (M1 fix pass item 2; FR-003, blueprint 9.3).
 
-Every route today acts on the whole platform. A permission counts for such a route only if
-it comes from a role the principal holds through at least one unscoped grant: a
-`system_owner` narrowed to one system must not read the platform-wide ruleset.
+Most routes act on the whole platform. A permission counts for such a route only if it
+comes from a role the principal holds through at least one unscoped grant: a
+`system_owner` narrowed to one system must not read the platform-wide ruleset. The routes
+that name one approval are resource routes (`tests/api/test_approvals_api.py`).
 """
 
 from __future__ import annotations
@@ -62,14 +63,20 @@ class TestPlatformWideRoutes:
         r = api.client.get(RULESET, headers=api.headers(token))
         assert r.status_code == 200, r.text
 
-    def test_every_existing_route_is_platform_wide(self, api: Api) -> None:
-        declared = [
-            route_scope(route)
+    def test_only_the_routes_naming_one_approval_are_resource_scoped(self, api: Api) -> None:
+        declared = {
+            (method, route.path): route_scope(route)
             for route in api.app.routes
             if isinstance(route, APIRoute) and route_scope(route) is not None
-        ]
-        assert len(declared) >= 9
-        assert set(declared) == {"platform"}
+            for method in route.methods
+        }
+        assert len(declared) >= 19
+        assert {key for key, scope in declared.items() if scope == "resource"} == {
+            ("GET", "/v1/approvals/{approval_id}"),
+            ("POST", "/v1/approvals/{approval_id}/approve"),
+            ("POST", "/v1/approvals/{approval_id}/reject"),
+        }
+        assert set(declared.values()) == {"platform", "resource"}
 
 
 class TestResourceScopedExtension:

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import io
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -30,18 +30,33 @@ from ciso.common.principal import Principal
 def make_api(tmp_path: Path) -> Iterator[ApiFactory]:
     built: list[tuple[Container, TestClient]] = []
 
-    def factory(settings: Settings | None = None, **safety: Any) -> Api:
+    def factory(
+        settings: Settings | None = None,
+        *,
+        change: Callable[[Settings], Settings] | None = None,
+        rewire: Callable[[Container], Container] | None = None,
+        environ: dict[str, str] | None = None,
+        **safety: Any,
+    ) -> Api:
+        """`change` edits the provisional settings before the build; `rewire` swaps a
+        service on the built container before the app is made (test doubles only);
+        `environ` replaces the secret environment."""
         safety.setdefault("api_rate_limit_per_minute", GENEROUS_LIMIT)
         chosen = settings or settings_for(tmp_path / f"data{len(built)}", **safety)
+        if change is not None:
+            chosen = change(chosen)
         clock = FixedClock()
         logs = io.StringIO()
         container = build_container(
             chosen,
-            environ=dict(SECRET_ENV),
+            environ=dict(SECRET_ENV if environ is None else environ),
             clock=clock,
             scrypt=FAST_SCRYPT,
             log_stream=logs,
         )
+        if rewire is not None:
+            # A copy that shares the lifecycle: closing either releases everything once.
+            container = rewire(container)
         app = create_app(container)
         client = TestClient(app, raise_server_exceptions=False)
         built.append((container, client))

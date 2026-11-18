@@ -25,8 +25,16 @@ what is missing, and the component that needs it refuses:
   Every safety number comes from `Settings.safety`, never from a `build_container`
   argument.
 
-External inference is not wired here (blueprint 8.4, ADR-0006): the container holds no
-such service.
+Approvals (blueprint 9.5, ADR-0016): one `ApprovalService`, built in
+`ciso.app.approvals_wiring` with the redactor and the audit read-back.
+
+External inference (blueprint 8.4, ADR-0006): one `ExternalInferenceGateway`, built by
+`build_external_gateway` below (only this module and the external-inference API router
+may import that package). It is off unless `Settings.external_inference` says otherwise,
+it reads the GATED kill switch, and `build_container` gives it no transport: this build
+ships none, so authorize and transmit refuse even when the path is switched on.
+
+The execution broker is not wired here yet.
 """
 
 from __future__ import annotations
@@ -34,30 +42,42 @@ from __future__ import annotations
 import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import timedelta
 from types import TracebackType
 from typing import IO, Self
 
 from sqlalchemy import Engine
 
 from ciso.app import tables as app_tables
+from ciso.app.approvals_wiring import build_approvals
 from ciso.app.audit_wiring import UnavailableAuditLog, build_witness, open_audit
+from ciso.app.core_wiring import (
+    Lifecycle,
+    build_authenticator,
+    build_inference,
+    build_killswitch,
+    build_policy,
+)
 from ciso.app.health_checks import AUTH_AUDIT_GAUGE, register_health
 from ciso.app.killswitch_history import AuditKillSwitchHistory
 from ciso.app.killswitch_startup import run_startup
-from ciso.app.logging_lease import LogLease, acquire_logging
+from ciso.app.logging_lease import acquire_logging
 from ciso.app.policy_context import DefaultPolicyContext
 from ciso.app.readiness import (
     HEALTH_UNTIMED,
     SECRET_REF_FIELDS,
     Readiness,
+    all_missing,
     startup_warnings,
     unusable_refs,
 )
 from ciso.app.settings import Settings
+from ciso.app.workflow_wiring import build_queue
+from ciso.approvals import ApprovalService
+from ciso.approvals import tables as approvals_tables
 from ciso.audit import AuditLog, FileHeadWitness, HeadAnchor, init_audit_schema
 from ciso.common.clock import Clock, SystemClock
 from ciso.common.db import create_db_engine, init_operational_schema
+from ciso.common.protocols import AuditSink, KillSwitchReader, PrincipalResolver
 from ciso.identity import (
     PRODUCTION_SCRYPT,
     Authenticator,
@@ -66,14 +86,16 @@ from ciso.identity import (
     ScryptParams,
 )
 from ciso.identity import tables as identity_tables
-from ciso.inference import InferenceGateway, StubLocalProvider, load_manifest
+from ciso.inference import InferenceGateway
 from ciso.inference import tables as inference_tables
+from ciso.inference.external import ExternalInferenceGateway, ExternalTransport
+from ciso.inference.external import tables as external_tables
 from ciso.killswitch import KillSwitch
 from ciso.killswitch import tables as killswitch_tables
 from ciso.observability.health import HealthRegistry
-from ciso.observability.metrics import MetricNames, MetricsRegistry
+from ciso.observability.metrics import MetricsRegistry
 from ciso.ops import GatedKillSwitch, IntegrityState, StartupReport
-from ciso.policy import OperationCatalog, PolicyEngine, load_default_ruleset
+from ciso.policy import OperationCatalog, PolicyEngine
 from ciso.vault import EnvSecretStore, SecretRedactor
 from ciso.workflows import JobQueue
 from ciso.workflows import tables as workflows_tables
@@ -84,6 +106,8 @@ logger = logging.getLogger(__name__)
 #: the tables, so `init_operational_schema` creates them.
 TABLE_MODULES = (
     app_tables,
+    approvals_tables,
+    external_tables,
     identity_tables,
     inference_tables,
     killswitch_tables,
@@ -100,26 +124,10 @@ __all__ = [
     "DefaultPolicyContext",
     "Readiness",
     "build_container",
+    "build_external_gateway",
 ]
 
 AuditService = AuditLog | UnavailableAuditLog
-
-
-class _Lifecycle:
-    """The container's only mutable part: what `close()` must release, released once."""
-
-    def __init__(self, logs: LogLease) -> None:
-        self.engines: tuple[Engine, ...] = ()
-        self.logs = logs
-        self.closed = False
-
-    def close(self) -> None:
-        if self.closed:
-            return
-        self.closed = True
-        self.logs.release()
-        for engine in self.engines:
-            engine.dispose()
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -154,11 +162,17 @@ class Container:
     policy_context: DefaultPolicyContext
     queue: JobQueue
     inference: InferenceGateway
+    #: Human approvals. Only the approvals router decides through it; the external gateway
+    #: (and later the execution broker) file, check and consume.
+    approvals: ApprovalService
+    #: The external model path (blueprint 8.4). Refuses unless settings switch it on; has
+    #: no transport in this build.
+    external_inference: ExternalInferenceGateway
     metrics: MetricsRegistry
     health: HealthRegistry
     missing: tuple[str, ...]
     warnings: tuple[str, ...]
-    _lifecycle: _Lifecycle = field(repr=False)
+    _lifecycle: Lifecycle = field(repr=False)
 
     def readiness(self) -> Readiness:
         """`Settings.missing_for_writes()`, unresolvable references and start-up problems."""
@@ -183,11 +197,6 @@ class Container:
         tb: TracebackType | None,
     ) -> None:
         self.close()
-
-
-def _seconds(value: float | None) -> timedelta | None:
-    """Settings hold seconds; some constructors take timedelta. `None` stays `None`."""
-    return None if value is None else timedelta(seconds=value)
 
 
 def build_container(
@@ -217,7 +226,7 @@ def build_container(
     logs = acquire_logging(
         redactor, log_level, stream=log_stream, metrics=metrics, logger_names=logger_names
     )
-    lifecycle = _Lifecycle(logs)
+    lifecycle = Lifecycle(logs)
     try:
         return _assemble(settings, environ, clock, scrypt, redactor, metrics, lifecycle)
     except BaseException:
@@ -232,7 +241,7 @@ def _assemble(
     scrypt: ScryptParams,
     redactor: SecretRedactor,
     metrics: MetricsRegistry,
-    lifecycle: _Lifecycle,
+    lifecycle: Lifecycle,
 ) -> Container:
     store = EnvSecretStore(environ, redactor=redactor)
     unusable = unusable_refs(settings, store)
@@ -260,16 +269,10 @@ def _assemble(
         witness_every=settings.safety.audit_witness_every,
     )
     identity = IdentityService(operational, clock, audit, settings.classification)
-    killswitch = KillSwitch(
-        engine=operational,
-        audit=audit,
-        clock=clock,
-        principals=identity,
-        secrets=store,
-        key_ref=settings.killswitch_key_ref,
-        history=AuditKillSwitchHistory(audit),
-        claim_timeout=_seconds(settings.safety.killswitch_claim_timeout_seconds),
-    )
+    killswitch = build_killswitch(
+        settings, engine=operational, audit=audit, clock=clock, principals=identity,
+        secrets=store, history=AuditKillSwitchHistory(audit),
+    )  # fmt: skip
     health = HealthRegistry(
         clock,
         check_timeout_seconds=settings.safety.health_check_timeout_seconds,
@@ -279,30 +282,23 @@ def _assemble(
         operational=operational, audit=audit, killswitch=killswitch, health=health, clock=clock
     )
     warnings = startup_warnings(settings)
-    missing = tuple(
-        dict.fromkeys(
-            (*settings.missing_for_writes(), *unusable.values(), *audit_problems, *gate.problems)
-        )
-    )
+    missing = all_missing(settings, unusable.values(), audit_problems, gate.problems)
     catalog = OperationCatalog(())
-    authenticator = Authenticator(
-        operational,
-        clock,
-        audit,
-        identity,
-        max_token_ttl=_seconds(settings.safety.max_token_ttl_seconds),
-        scrypt=scrypt,
+    authenticator = build_authenticator(
+        settings, engine=operational, clock=clock, audit=audit, identity=identity, scrypt=scrypt
     )
-    inference = InferenceGateway(
-        StubLocalProvider(),
-        redactor,
-        audit,
-        clock,
-        operational,
-        load_manifest(),
-        timeout_seconds=settings.safety.inference_timeout_seconds,
-        max_abandoned_calls=settings.safety.inference_max_abandoned_calls,
+    inference = build_inference(
+        settings, engine=operational, clock=clock, audit=audit, redactor=redactor
     )
+    approvals = build_approvals(
+        settings, operational=operational, audit=audit, audit_engine=audit_engine,
+        clock=clock, principals=identity, redactor=redactor,
+    )  # fmt: skip
+    # The gated reader, never the raw switch: failed start-up integrity must block too.
+    external = build_external_gateway(
+        settings, engine=operational, clock=clock, audit=audit, redactor=redactor,
+        principals=identity, killswitch=gate.reader, approvals=approvals, secrets=store,
+    )  # fmt: skip
     metrics.declare_gauge(AUTH_AUDIT_GAUGE)
     register_health(
         health,
@@ -339,17 +335,14 @@ def _assemble(
         authenticator=authenticator,
         host_local=HostLocalAdmin(operational, clock, audit, authenticator.minter),
         catalog=catalog,
-        policy=PolicyEngine(
-            catalog=catalog,
-            ruleset=load_default_ruleset(),
-            clock=clock,
-            audit=audit,
-            principals=identity,
-            max_envelope_ttl=_seconds(settings.safety.max_envelope_ttl_seconds),
+        policy=build_policy(
+            settings, catalog=catalog, clock=clock, audit=audit, principals=identity
         ),
         policy_context=DefaultPolicyContext(),
-        queue=_queue(settings, operational, clock, audit, identity, metrics),
+        queue=build_queue(settings, operational, clock, audit, identity, metrics),
         inference=inference,
+        approvals=approvals,
+        external_inference=external,
         metrics=metrics,
         health=health,
         missing=missing,
@@ -358,28 +351,44 @@ def _assemble(
     )
 
 
-def _queue(
+def build_external_gateway(
     settings: Settings,
+    *,
     engine: Engine,
     clock: Clock,
-    audit: AuditService,
-    identity: IdentityService,
-    metrics: MetricsRegistry,
-) -> JobQueue:
-    safety = settings.safety
+    audit: AuditSink,
+    redactor: SecretRedactor,
+    principals: PrincipalResolver,
+    killswitch: KillSwitchReader,
+    approvals: ApprovalService,
+    secrets: EnvSecretStore,
+    transport: ExternalTransport | None = None,
+) -> ExternalInferenceGateway:
+    """The external model gateway as `Settings` describe it (blueprint 8.4, ADR-0006).
 
-    def on_dead_letter(kind: str, reason: str) -> None:
-        # The reason is free text: it stays in the queue's log line, never in a label.
-        metrics.inc(MetricNames.QUEUE_DEAD_LETTERS, labels={"kind": kind})
-
-    return JobQueue(
-        engine,
-        clock,
-        audit,
-        identity,
-        lease_seconds=safety.queue_lease_seconds,
-        max_attempts=safety.queue_max_attempts,
-        backoff_base_seconds=safety.queue_backoff_base_seconds,
-        backoff_max_seconds=safety.queue_backoff_max_seconds,
-        on_dead_letter=on_dead_letter,
+    The switch, approver role, allowed classifications and both byte limits come from
+    settings and are passed as they are: an unset one reaches the gateway as its refusing
+    default. `killswitch` must be the container's gated reader. A configured digest key
+    reference is passed even when it does not resolve, so the gateway refuses instead of
+    quietly storing unkeyed digests. `build_container` never passes `transport`: no
+    implementation ships. The parameter is the seam for one, and for tests.
+    """
+    external = settings.external_inference
+    return ExternalInferenceGateway(
+        engine=engine,
+        clock=clock,
+        audit=audit,
+        redactor=redactor,
+        principals=principals,
+        killswitch=killswitch,
+        approvals=approvals,
+        scheme=settings.classification,
+        allowed_classifications=external.allowed_classifications,
+        enabled=external.enabled,
+        approver_role=external.approver_role,
+        transport=transport,
+        secrets=secrets,
+        digest_key_ref=settings.external_digest_key_ref,
+        max_payload_bytes=settings.safety.external_max_payload_bytes,
+        max_response_bytes=settings.safety.external_max_response_bytes,
     )

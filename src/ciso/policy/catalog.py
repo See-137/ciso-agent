@@ -12,66 +12,32 @@ from collections.abc import Iterable
 
 from pydantic import field_validator, model_validator
 
+from ciso.common.closed_schema import schema_problem
 from ciso.common.enums import AuthorityLevel
 from ciso.common.errors import ValidationFailed
+
+# The protected families and suppression verbs live in `ciso.common.protected`; they are
+# re-exported here under the names this module always had.
+from ciso.common.protected import PROTECTED_FAMILIES, SUPPRESSION_VERBS, is_protected_name
 from ciso.common.schemas import Model
 
 _NAME_RE = re.compile(r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$")
 
-#: First name segments that change the control plane itself (blueprint 9.2 last bullet):
-#: policy, rules, identity, roles and their assignments, approvals and approvers,
-#: playbooks, connectors, models, audit records, the kill switch, permissions, prompts.
-#: Any family starting with `audit` counts too (`audit_log`, ...).
-PROTECTED_FAMILIES: frozenset[str] = frozenset(
-    {
-        "policy",
-        "policies",
-        "rule",
-        "rules",
-        "identity",
-        "role",
-        "roles",
-        "role_assignment",
-        "role_assignments",
-        "approval",
-        "approvals",
-        "approver",
-        "approvers",
-        "playbook",
-        "playbooks",
-        "connector",
-        "connectors",
-        "model",
-        "models",
-        "audit",
-        "killswitch",
-        "permission",
-        "permissions",
-        "prompt",
-        "prompts",
-    }
-)
-
-#: Verbs that hide or suppress security signal (blueprint 9.2: the model cannot suppress
-#: findings). An operation is protected when any `_`-separated word of a segment after
-#: the family is one of these, for example `finding.suppress` or `alert.mute_all`.
-SUPPRESSION_VERBS: frozenset[str] = frozenset(
-    {"suppress", "dismiss", "mute", "silence", "waive", "ignore", "hide"}
-)
-
-
-def is_protected_name(name: str) -> bool:
-    """True when `name` belongs to a protected family or uses a suppression verb."""
-    family, *rest = name.split(".")
-    if family in PROTECTED_FAMILIES or family.startswith("audit"):
-        return True
-    return any(word in SUPPRESSION_VERBS for segment in rest for word in segment.split("_"))
+__all__ = [
+    "PROTECTED_FAMILIES",
+    "SUPPRESSION_VERBS",
+    "OperationCatalog",
+    "OperationSpec",
+    "is_protected_name",
+]
 
 
 class OperationSpec(Model):
     """One registered operation.
 
-    `args_model` is a closed schema (a `ciso.common.schemas.Model` subclass). When
+    `args_model` is a closed schema by the allowlist in `ciso.common.closed_schema` (the
+    same check the tool registry and the write-adapter contract apply): a frozen `Model`
+    subclass that forbids extra fields and whose fields are bounded typed values. When
     `channel_argument` is set the operation sends something somewhere, and that argument
     names the channel the engine checks against the approved-channel list (G13).
     `agent_requestable` must be set for an agent or service to request the operation at
@@ -90,15 +56,16 @@ class OperationSpec(Model):
     @field_validator("name")
     @classmethod
     def _name(cls, value: str) -> str:
-        if not _NAME_RE.match(value):
+        if not _NAME_RE.fullmatch(value):
             raise ValueError(f"bad operation name: {value!r}")
         return value
 
     @field_validator("args_model")
     @classmethod
     def _closed(cls, value: type[Model]) -> type[Model]:
-        if value.model_config.get("extra") != "forbid":
-            raise ValueError("argument schema must forbid extra fields")
+        problem = schema_problem(value)
+        if problem is not None:
+            raise ValueError(f"argument schema is not closed: {problem}")
         return value
 
     @model_validator(mode="after")

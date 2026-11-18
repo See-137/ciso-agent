@@ -44,7 +44,7 @@ class ContextRef(Model):
     @field_validator("classification")
     @classmethod
     def _label(cls, value: str) -> str:
-        if not _LABEL_RE.match(value):
+        if not _LABEL_RE.fullmatch(value):
             raise ValueError("bad classification label shape")
         return value
 
@@ -63,7 +63,7 @@ class InferenceRequest(Model):
     @field_validator("task_category", "prompt_template_id")
     @classmethod
     def _slug(cls, value: str) -> str:
-        if not _SLUG_RE.match(value):
+        if not _SLUG_RE.fullmatch(value):
             raise ValueError("expected a short lowercase identifier")
         return value
 

@@ -9,9 +9,10 @@ wires services (plan T1.14, G14, G18; ADR-0013).
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterable
 from typing import Final
 
-from ciso.app.settings import Settings
+from ciso.app.settings import KEY_REF_FIELDS, Settings
 from ciso.common.errors import CisoError, FailClosed
 from ciso.common.schemas import Model
 from ciso.vault import MIN_KEY_BYTES, EnvSecretStore, resolve_key_bytes
@@ -21,16 +22,17 @@ logger = logging.getLogger(__name__)
 #: Secret references checked at start-up. Each is used as a cryptographic key, so each must
 #: resolve to at least `MIN_KEY_BYTES` bytes. Resolving also registers the value with the
 #: redactor, so it is scrubbed from every later log line and audit detail.
-SECRET_REF_FIELDS: Final = (
-    "audit_hmac_key_ref",
-    "audit_witness_key_ref",
-    "killswitch_key_ref",
-    "evidence_key_ref",
-    "backup_key_ref",
-)
+SECRET_REF_FIELDS: Final = KEY_REF_FIELDS
 HEALTH_UNTIMED: Final = "health_check_timeout_seconds (not set; every health check reads unknown)"
 WITNESS_UNDER_DATA_DIR: Final = "audit witness is stored under the data directory"
 ANCHOR_UNDER_DATA_DIR: Final = "audit anchor is stored under the data directory"
+EXTERNAL_NO_TRANSPORT: Final = (
+    "external inference is enabled but this build ships no transport; authorize and transmit refuse"
+)
+EXTERNAL_NO_DIGEST_KEY: Final = (
+    "external inference is enabled without external_digest_key_ref; "
+    "item digests are unkeyed and no answer digest is kept"
+)
 
 
 class Readiness(Model):
@@ -63,10 +65,38 @@ def unusable_refs(settings: Settings, store: EnvSecretStore) -> dict[str, str]:
     return failed
 
 
+def external_missing(settings: Settings) -> tuple[str, ...]:
+    """What an ENABLED external model path still lacks (blueprint 8.4, G14, G26). Empty
+    while the path is off: an unset value then blocks nothing anybody asked for. The
+    gateway refuses on each of these by itself; this only makes the refusal visible at
+    start-up. An unusable digest key is reported by `unusable_refs`."""
+    external = settings.external_inference
+    if not external.enabled:
+        return ()
+    missing: list[str] = []
+    if external.approver_role is None:
+        missing.append("external_inference.approver_role")
+    if not external.allowed_classifications:
+        missing.append("external_inference.allowed_classifications")
+    for name in ("external_max_payload_bytes", "external_max_response_bytes"):
+        if getattr(settings.safety, name) is None:
+            missing.append(f"safety.{name}")
+    return tuple(missing)
+
+
+def all_missing(settings: Settings, *found: Iterable[str]) -> tuple[str, ...]:
+    """Everything that makes the platform not ready, each entry once, in a fixed order:
+    unset values no write path can run without, what an enabled external path lacks, then
+    whatever start-up found (`found`: unusable key references, audit and gate problems)."""
+    names = (*settings.missing_for_writes(), *external_missing(settings))
+    return tuple(dict.fromkeys((*names, *(item for group in found for item in group))))
+
+
 def startup_warnings(settings: Settings) -> tuple[str, ...]:
     """`Settings.integrity_warnings()` plus placement checks the settings cannot make
-    alone, plus untimed health checks. Empty only when anchor and witness are both
-    configured outside the data directory and health checks are timed."""
+    alone, plus untimed health checks, plus what an enabled external model path runs
+    without. Empty only when anchor and witness are both configured outside the data
+    directory, health checks are timed and the external path is off."""
     warnings = list(settings.integrity_warnings())
     data_dir = settings.data_dir.resolve()
     anchor = settings.audit_anchor_path
@@ -81,4 +111,8 @@ def startup_warnings(settings: Settings) -> tuple[str, ...]:
         warnings.append(WITNESS_UNDER_DATA_DIR)
     if settings.safety.health_check_timeout_seconds is None:
         warnings.append(HEALTH_UNTIMED)
+    if settings.external_inference.enabled:
+        warnings.append(EXTERNAL_NO_TRANSPORT)
+        if settings.external_digest_key_ref is None:
+            warnings.append(EXTERNAL_NO_DIGEST_KEY)
     return tuple(warnings)

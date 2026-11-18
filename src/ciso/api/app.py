@@ -6,16 +6,20 @@ the pages load scripts from a public network); the OpenAPI document, which is th
 interface description in this build (G28), is served at `/v1/openapi.json` to an
 authenticated caller.
 
-Error bodies are short and fixed per status; exception text never reaches a client. An
-unexpected exception is logged through the redacting handler and answered 500 with a
-correlation id only. Every authenticated request is audited (`api.request`) when it ends.
+Error bodies are short and fixed per status; exception text never reaches a client. A
+refusal that carries a stable reason code (an approval or external-inference refusal)
+also gets that code in a `reason` field: the enum value, never the message. An unexpected
+exception is logged through the redacting handler and answered 500 with a correlation id
+only. Every authenticated request is audited (`api.request`) when it ends.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import re
 from collections.abc import Awaitable, Callable, MutableMapping
+from enum import StrEnum
 from typing import Any
 
 import anyio
@@ -31,6 +35,8 @@ from ciso.api.deps import (
     undeclared_routes,
 )
 from ciso.api.ratelimit import RateLimiter
+from ciso.api.routers.approvals import register_approval_routes
+from ciso.api.routers.external_inference import register_external_inference_routes
 from ciso.api.routers.system import register_system_routes
 from ciso.app.container import Container
 from ciso.common.enums import AuditOutcome
@@ -82,6 +88,27 @@ def status_for(exc: CisoError) -> tuple[int, str, str]:
     return 500, "internal_error", "internal error"
 
 
+#: The shape of a reason code: a short enum value. Anything else is not sent.
+_CODE_RE = re.compile(r"[a-z][a-z0-9_]{0,63}")
+
+
+def reason_fields(exc: BaseException) -> dict[str, str]:
+    """The stable reason codes an error carries, for the response body.
+
+    `reason` is sent only when it is a `StrEnum` member (the approvals and external
+    inference reason codes are), `approval_reason` only when it has the shape of such a
+    value. A free-text reason, like the exception message itself, is never sent.
+    """
+    fields: dict[str, str] = {}
+    reason = getattr(exc, "reason", None)
+    if isinstance(reason, StrEnum) and _CODE_RE.fullmatch(reason.value):
+        fields["reason"] = reason.value
+    nested = getattr(exc, "approval_reason", None)
+    if isinstance(nested, str) and _CODE_RE.fullmatch(nested):
+        fields["approval_reason"] = nested
+    return fields
+
+
 def _unauthenticated_response() -> JSONResponse:
     return JSONResponse(
         dict(UNAUTHENTICATED_BODY), status_code=401, headers={"WWW-Authenticate": "Bearer"}
@@ -93,7 +120,9 @@ async def _api_error(request: Request, exc: Exception) -> JSONResponse:
     if exc.status == 401:
         return _unauthenticated_response()
     return JSONResponse(
-        {"error": exc.code, "message": exc.message}, status_code=exc.status, headers=exc.headers
+        {**exc.extra, "error": exc.code, "message": exc.message},
+        status_code=exc.status,
+        headers=exc.headers,
     )
 
 
@@ -103,7 +132,9 @@ async def _ciso_error(request: Request, exc: Exception) -> JSONResponse:
         return _unauthenticated_response()
     status, code, message = status_for(exc)
     logger.info("api: %s answered %s (%s)", request.url.path, status, type(exc).__name__)
-    return JSONResponse({"error": code, "message": message}, status_code=status)
+    return JSONResponse(
+        {**reason_fields(exc), "error": code, "message": message}, status_code=status
+    )
 
 
 async def _invalid_request(request: Request, exc: Exception) -> JSONResponse:
@@ -212,6 +243,8 @@ def create_app(container: Container) -> FastAPI:
         container.clock, container.settings.safety.api_rate_limit_per_minute
     )
     register_system_routes(app, container)
+    register_approval_routes(app, container)
+    register_external_inference_routes(app, container)
     app.add_exception_handler(ApiError, _api_error)
     app.add_exception_handler(CisoError, _ciso_error)
     app.add_exception_handler(RequestValidationError, _invalid_request)

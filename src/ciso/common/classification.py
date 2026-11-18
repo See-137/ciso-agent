@@ -31,7 +31,7 @@ class ClassificationScheme(Model):
         if len(set(labels)) != len(labels):
             raise ValueError("classification labels must be unique")
         for label in labels:
-            if not _LABEL_RE.match(label):
+            if not _LABEL_RE.fullmatch(label):
                 raise ValueError(f"bad classification label: {label!r}")
             if label == UNKNOWN_LABEL:
                 raise ValueError("'unknown' is built in and cannot be configured")

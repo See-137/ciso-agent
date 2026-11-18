@@ -30,7 +30,7 @@ _PLACEHOLDER_RE = re.compile(r"\{\{([a-z][a-z0-9_]{0,63})\}\}")
 
 
 def _check_sha(value: str) -> str:
-    if not _SHA256_RE.match(value):
+    if not _SHA256_RE.fullmatch(value):
         raise ValueError("sha256 must be 64 lowercase hex characters")
     return value
 

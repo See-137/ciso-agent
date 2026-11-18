@@ -155,3 +155,34 @@ execution broker must take the composition root's gated reader, never the raw sw
 `src/ciso/audit/log.py` is 435 lines; the resource-scoped route path
 (`require(..., target=...)`) is exercised only by a test route.
 
+
+## M2 in progress (2026-11-18, stopped by a usage limit; nothing committed)
+
+Built in the working tree, uncommitted: `ciso.approvals`, `ciso.execution` (tool registry,
+channels, broker, outbox tools, recovery), `ciso.write_adapters` (contract only),
+`ciso.inference.external` (propose, preview, minimize, gateway), hardened architecture
+tests, and `.match` -> `.fullmatch` on every anchored validator in `src` (an M1 bug: a
+trailing newline was accepted in ids, refs, labels, rule ids and archive names).
+
+Reviews: `docs/reviews/m2-approvals-external-inference.md` (fixed), 
+`docs/reviews/m2-tools-channels-write-adapters.md` (fixed),
+`docs/reviews/m2-execution-broker.md` (fix lane STOPPED part-way by the coordinator: the
+broker files may be half-edited; re-brief a builder on the whole review).
+
+Before trusting the tree: run the disabled-guard search, `git status`, and the targeted
+broker tests; a stopped builder may have left a file mid-edit.
+
+Still to do for M2: finish the broker review fixes; move the duplicated closed-schema check
+(`execution/schema.py`, `write_adapters/schema.py`) into `ciso.common`; wire the composition
+root and the API routers (T2.9), including `ApprovalService(redactor=..., audit_records=...)`,
+the external byte limits (new settings, no defaults) and the broker's new key ref; then the
+gate (full suite in the tree and on a fresh clone, mypy, ruff, disabled-guard search, hand
+mutations) and a local commit.
+
+Owner decisions raised in M2 (none decided):
+- Unknown credential issuer: an approver whose sign-in issuer is unknown is refused.
+- External inference: `transmit` refuses an approval decided by the transmitter even when
+  `allow_self_approval` is on, so one person can never use the external path alone.
+- External records store the redacted purpose text (blueprint 8.4 step 6); audit holds only its hash.
+- No deadline on the external transport; the external path does not consult the policy engine.
+- Same person holding two actor records, and multi-hop credential issuance, stay open (ADR-0016, ADR-0004).

@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import datetime, timedelta
-from typing import Any
+from typing import Annotated, Any
 
 import pytest
+from pydantic import Field
 from tests.fakes.core import FakeAudit, FakePrincipals
 
 from ciso.common.clock import FixedClock
@@ -34,25 +35,29 @@ class NoArgs(Model):
     pass
 
 
+#: The catalog only accepts closed argument schemas: every string and tuple is bounded.
+Text = Annotated[str, Field(max_length=200)]
+
+
 class ReadArgs(Model):
-    fields: tuple[str, ...] = ()
+    fields: Annotated[tuple[Text, ...], Field(max_length=32)] = ()
 
 
 class ChannelArgs(Model):
-    channel: str
-    title: str
+    channel: Text
+    title: Text
 
 
 class HostArgs(Model):
-    host: str
+    host: Text
 
 
 class NoteArgs(Model):
-    note: str
+    note: Text
 
 
 class PolicyChangeArgs(Model):
-    rule_id: str
+    rule_id: Text
 
 
 def _protected(name: str, level: AuthorityLevel = AuthorityLevel.L4_HIGH_IMPACT) -> OperationSpec:

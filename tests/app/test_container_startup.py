@@ -254,10 +254,16 @@ class TestLogging:
             server.propagate = True
 
 
-class TestNoExternalInference:
-    def test_no_attribute_method_or_field_names_external(self, tmp_path: Path) -> None:
+class TestOneExternalInferencePath:
+    """Since plan T2.9 the container holds the external gateway. It is one field, apart
+    from the local gateway, and nothing else on the container names the path
+    (`tests/app/test_m2_wiring.py` shows that it refuses)."""
+
+    def test_exactly_one_field_names_external(self, tmp_path: Path) -> None:
         with build(provisional(tmp_path / "d"), SECRET_ENV) as c:
             names = set(dir(c)) | {f.name for f in dataclasses.fields(c)}
             assert names, "nothing inspected"
-            assert [n for n in names if "external" in n.lower()] == []
+            assert [n for n in names if "external" in n.lower()] == ["external_inference"]
             assert c.inference is not None
+            assert c.inference is not c.external_inference
+            assert "external" not in type(c.inference).__module__

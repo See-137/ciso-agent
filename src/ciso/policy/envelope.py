@@ -63,7 +63,7 @@ class EnvelopeScope(Model):
     @field_validator("classification")
     @classmethod
     def _classification(cls, value: str | None) -> str | None:
-        if value is not None and not _LABEL_RE.match(value):
+        if value is not None and not _LABEL_RE.fullmatch(value):
             raise ValueError(f"bad classification label: {value!r}")
         return value
 
@@ -86,7 +86,7 @@ class EnvelopeScope(Model):
     @field_validator("tenant", "boundary")
     @classmethod
     def _labels(cls, value: str) -> str:
-        if not _KEY_RE.match(value):
+        if not _KEY_RE.fullmatch(value):
             raise ValueError(f"bad scope value: {value!r}")
         return value
 
@@ -145,7 +145,7 @@ class ActionEnvelope(Model):
     @field_validator("idempotency_key", "actor_id")
     @classmethod
     def _key(cls, value: str) -> str:
-        if not _KEY_RE.match(value):
+        if not _KEY_RE.fullmatch(value):
             raise ValueError("bad identifier")
         return value
 
@@ -168,7 +168,7 @@ class ActionEnvelope(Model):
     @field_validator("requesting_component")
     @classmethod
     def _component(cls, value: str) -> str:
-        if not _COMPONENT_RE.match(value):
+        if not _COMPONENT_RE.fullmatch(value):
             raise ValueError("bad requesting_component")
         return value
 
@@ -190,7 +190,7 @@ class ActionEnvelope(Model):
     @field_validator("risk_class")
     @classmethod
     def _risk(cls, value: str) -> str:
-        if not _LABEL_RE.match(value):
+        if not _LABEL_RE.fullmatch(value):
             raise ValueError("bad risk_class")
         return value
 

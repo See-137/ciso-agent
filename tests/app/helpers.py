@@ -22,6 +22,7 @@ SECRET_ENV = {
     "CISO_SECRET_KILLSWITCH_KEY": "killswitch-key-for-container-tests-6e30",
     "CISO_SECRET_EVIDENCE_KEY": "evidence-key-for-container-tests-88d2",
     "CISO_SECRET_BACKUP_KEY": "backup-key-for-container-tests-1f07",
+    "CISO_SECRET_EXTERNAL_DIGEST_KEY": "external-digest-key-for-container-tests-7b2c",
 }
 
 

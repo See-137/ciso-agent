@@ -59,16 +59,27 @@ UNAUTHENTICATED_BODY: Final = {"error": "unauthenticated", "message": "authentic
 
 
 class ApiError(Exception):
-    """A refusal the API answers itself, with a fixed short body."""
+    """A refusal the API answers itself, with a fixed short body. `extra` adds fields of
+    stable codes and ids to that body (a reason code, a record id), never free text."""
 
     def __init__(
-        self, status: int, code: str, message: str, headers: dict[str, str] | None = None
+        self,
+        status: int,
+        code: str,
+        message: str,
+        headers: dict[str, str] | None = None,
+        extra: Mapping[str, str] | None = None,
     ) -> None:
         super().__init__(code)
         self.status = status
         self.code = code
         self.message = message
         self.headers = headers or {}
+        self.extra = dict(extra or {})
+
+
+def not_found() -> ApiError:
+    return ApiError(404, "not_found", "not found")
 
 
 def unauthenticated() -> ApiError:
@@ -83,6 +94,11 @@ def unauthenticated() -> ApiError:
 def container_of(request: Request) -> Container:
     container: Container = request.app.state.container
     return container
+
+
+def correlation_of(request: Request) -> str:
+    """The request's correlation id, so service audit records line up with `api.request`."""
+    return str(getattr(request.state, "correlation_id", ""))
 
 
 def limiter_of(request: Request) -> RateLimiter:
@@ -138,7 +154,7 @@ def _audit_attempt(request: Request, principal: Principal, route: str) -> None:
         action="api.request",
         target=route,
         outcome=AuditOutcome.ATTEMPT,
-        correlation_id=str(getattr(request.state, "correlation_id", "")),
+        correlation_id=correlation_of(request),
         details={"method": request.method, "route": route},
     )
     try:
@@ -175,7 +191,8 @@ def require(
     route its role would otherwise allow. A route that acts on one resource passes
     `target`, a function returning that resource's attributes from the request; the
     permission then counts from any role whose grant covers those attributes
-    (`Principal.covers`). Every route that exists today is platform-wide.
+    (`Principal.covers`). The routes that name one approval do this; the rest are
+    platform-wide.
 
     Integrity gate. A state-changing request on a `gated` route (the default) is refused
     with 503 `writes_blocked` while the container's `killswitch_reader` blocks WRITES: the

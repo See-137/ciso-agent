@@ -110,7 +110,7 @@ def archive_file_name(archive_id: str) -> str:
 
 def check_member_name(name: str) -> str:
     """Relative, forward-slash, no `..`, no leading dot, limited characters."""
-    if len(name) > _MAX_NAME or not _NAME_RE.match(name) or ".." in name.split("/"):
+    if len(name) > _MAX_NAME or not _NAME_RE.fullmatch(name) or ".." in name.split("/"):
         raise ValidationFailed(f"unsafe archive member name: {name!r}")
     return name
 
@@ -127,7 +127,7 @@ def key_id(secret: bytes) -> bytes:
 
 def encode_header(archive_id: str, salt: bytes, kid: bytes) -> bytes:
     raw_id = archive_id.encode("ascii")
-    if not _ID_RE.match(archive_id) or len(salt) != SALT_LEN or len(kid) != KEY_ID_LEN:
+    if not _ID_RE.fullmatch(archive_id) or len(salt) != SALT_LEN or len(kid) != KEY_ID_LEN:
         raise ValidationFailed("bad archive header fields")
     return MAGIC + bytes([FORMAT_VERSION, len(raw_id)]) + raw_id + salt + kid
 

@@ -33,14 +33,14 @@ def _encode(value: int, length: int) -> str:
 
 
 def new_id(prefix: str, *, at_ms: int | None = None) -> str:
-    if not _PREFIX_RE.match(prefix):
+    if not _PREFIX_RE.fullmatch(prefix):
         raise ValidationFailed(f"bad id prefix: {prefix!r}")
     millis = time.time_ns() // 1_000_000 if at_ms is None else at_ms
     return f"{prefix}_{_encode(millis, 10)}{_encode(secrets.randbits(80), 16)}"
 
 
 def is_id(value: str, prefix: str | None = None) -> bool:
-    if not _ID_RE.match(value):
+    if not _ID_RE.fullmatch(value):
         return False
     return prefix is None or value.startswith(prefix + "_")
 
@@ -55,7 +55,11 @@ class EntityRef(NamedTuple):
     @classmethod
     def parse(cls, value: str) -> EntityRef:
         parts = value.split(":")
-        if len(parts) != 2 or not _KIND_RE.match(parts[0]) or not _REF_ID_RE.match(parts[1]):
+        if (
+            len(parts) != 2
+            or not _KIND_RE.fullmatch(parts[0])
+            or not _REF_ID_RE.fullmatch(parts[1])
+        ):
             raise ValidationFailed(f"bad entity ref: {value!r}")
         kind, ident = parts
         return cls(kind, ident)
