@@ -60,13 +60,17 @@ host-local admin command), `api` (authenticated control-plane API).
    and do not yet mention the witness `repairs` field, the `witness_torn_tail` warning,
    the `killswitch.read` permission or the start-up report in readiness.
 
-## Owner decisions waiting
+## Owner decisions
 
-Where the audit anchor and witness live (both default to the data directory and are
-reported as a weakness); the self-approval default; whether a console is wanted (the
-blueprint lists one as required, the build is API-only); whether administrators minting
-tokens for other people is acceptable until an identity provider is chosen; whether local
-checkpoint commits are wanted.
+Decided on 2026-11-18 (details in `docs/plan/decisions.md`): commit locally at each
+milestone gate; self-approval stays forbidden by default; a private GitHub repository is
+wanted but only later: offer it to the owner at the M3 gate, and do not create or push
+anything before the owner says go.
+
+Still waiting: where the audit anchor and witness live (both default to the data
+directory and are reported as a weakness); whether a console is wanted (the blueprint
+lists one as required, the build is API-only); whether administrators minting tokens for
+other people is acceptable until an identity provider is chosen.
 
 ## Next
 

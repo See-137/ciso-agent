@@ -87,3 +87,25 @@ The plan cites the planner's own ADR numbers. The authoritative list is
 - Phase 0 exit gate: needs people. The instruments are in `docs/phase0/`.
 - Phase 6: benchmarks, compliance mapping and procurement need evidence that does not
   exist yet.
+
+## Owner decisions, 2026-11-18
+
+Given by the owner in session, after the M1 gate.
+
+| Question | Decision |
+|---|---|
+| Local checkpoint commits at each milestone gate | Yes. Commit locally when a gate passes. |
+| Self-approval | Stays forbidden by default (`SafetySettings.allow_self_approval = False`). `ciso.approvals` (M2) enforces it. ADR-0016 remains "Proposed" as a record, with this default confirmed. |
+| Off-machine copy | Yes, a private GitHub repository, but not yet: create it and push only at a more substantial standing point, and only when the owner says go. The coordinator offers it at the M3 gate (see below). Until then the build stays local-only and nothing is pushed. |
+
+When to offer the push: at the M3 gate. M2 finishes the control plane (approvals,
+execution broker, external-inference gate), and M3 adds the registry, evidence store and
+connector contract, which is the first point where the platform takes a fixture estate in
+and shows a source-attributed registry end to end (blueprint Phase 2 exit gate). Before
+pushing: confirm the repository is private, confirm no secret values are in the tree or
+its history, and note that the blueprint PDF in `docs/reference/` is marked internal.
+
+Still open for the owner: where the audit anchor and witness live; whether a console is
+wanted; whether administrators minting tokens for other people is acceptable until an
+identity provider is chosen.
+
