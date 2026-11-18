@@ -5,8 +5,9 @@ which described a stop in the middle of M1.
 
 ## State
 
-- M0 and M1 are built, gated and committed on branch `build/baseline-platform`
-  (`git log --oneline` shows the commits). No remote exists; nothing was pushed.
+- M0 and M1 are built, gated and committed on branch `build/baseline-platform`.
+  M0 is `c0753cd`, M1 is `0a0188b`; later commits on the branch are documentation
+  only. No remote exists; nothing was pushed. The working tree was clean at close.
 - M2 to M6 are not started. The plan is `docs/plan/implementation-plan.md`;
   `docs/plan/decisions.md` wins where they differ.
 - Open findings and owner decisions: `docs/plan/followups.md`. Reviews: `docs/reviews/`.
@@ -44,8 +45,8 @@ host-local admin command), `api` (authenticated control-plane API).
 
 1. Accepting a restore that is behind the witness is designed, not built. Today such a
    restore is reported and the instance starts with writes blocked, which is safe but has
-   no way forward except removing the witness. Design is in the final fix-pass notes in
-   `docs/plan/followups.md` ("Later milestones").
+   no way forward except removing the witness. The design is in
+   `docs/plan/followups.md`, section "Carried out of the M1 final fix pass".
 2. No module consumes the gated kill-switch reader yet except the API. The M2 execution
    broker must take `container.killswitch_reader`, never the raw switch.
 3. Self-approval is forbidden by setting but nothing enforces it until `ciso.approvals`

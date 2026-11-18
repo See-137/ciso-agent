@@ -113,3 +113,45 @@ Owner decisions raised by the reviews:
   credentials resolved through a kill-switch-checked accessor (G20).
 - M6 (D6.1): ADR status pass; plan rows T1.3, T2.6, T3.2 wording.
 - M6: mutation step for each milestone gate is recorded in `docs/definition-of-done.md`.
+
+## Carried out of the M1 final fix pass (2026-11-18)
+
+Written by the coordinator after the M1 gate. These are not yet reflected in the rows
+above or in the ADRs.
+
+Done in the final pass and covered by tests (the ADRs still call them "in progress"):
+audit witness wiring in the composition root; API route permissions that respect grant
+scopes; a 32-byte minimum for every cryptographic key; the logging traceback fix;
+recovery from a torn witness line and from a crash during audit `initialise()`; the
+start-up integrity gate wired into the composition root and the API; a `killswitch.read`
+permission for administrators and auditors.
+
+Not built, design only: accepting a restore that is behind the witness. Today
+`RestoreService` reports `restored_behind_witness` with both sequence numbers and the
+restored instance starts with writes blocked. The design to build:
+
+- a signed witness line of kind `restore_accepted` naming the log id, the restored seq
+  and hash, the previous witnessed seq, the operator and the reason;
+- reading treats the last such entry for a log as a reset: earlier heads of that log are
+  ignored for the rollback and conflict checks, and the entry becomes the witnessed head;
+- an operation that resolves the actor through `PrincipalResolver`, requires a current
+  human `security_admin`, audits the attempt and the result, then publishes the entry;
+- exposed only as a host-local admin subcommand, never through the API;
+- tests: an accepted restore verifies ok and witnessed; an un-accepted rollback is still
+  `rolled_back`; a forged accept line fails its signature; an agent or service is refused.
+
+Requests to the coordinator that were not acted on:
+
+- `Settings`: an `audit_witness_max_bytes` value (no default) so a witness-size health
+  component can report `degraded`; `FileHeadWitness.size_bytes()` exists for it.
+- `Settings.integrity_warnings()`: take over the "anchor or witness under the data
+  directory" placement checks that now live in `ciso.app.readiness`.
+- ADRs and docs: record the witness `repairs` line field, the `witness_torn_tail`
+  warning, the `killswitch.read` permission, and the readiness entries
+  `audit_integrity (...)` and `startup_step_failed (...)`.
+
+Other facts for M2: no module takes a `KillSwitchReader` yet except the API, so the
+execution broker must take the composition root's gated reader, never the raw switch;
+`src/ciso/audit/log.py` is 435 lines; the resource-scoped route path
+(`require(..., target=...)`) is exercised only by a test route.
+
