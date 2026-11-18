@@ -39,5 +39,12 @@
     "enabled": false,
     "approver_role": null,
     "allowed_classifications": []
+  },
+  "governance": {
+    "ruleset_path": "config/governance-ruleset.provisional.json",
+    "required_sandbox_checks": null,
+    "central_gate_secret_ref": "secret://central_gate_signing_secret",
+    "central_gate_tolerance_seconds": 300,
+    "central_gate_replay_capacity": 10000
   }
 }

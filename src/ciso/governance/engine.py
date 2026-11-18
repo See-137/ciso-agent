@@ -30,6 +30,7 @@ from datetime import UTC, datetime
 from typing import Any, NamedTuple
 
 from ciso.common.activity import (
+    PERSON_REF_KIND,
     ActionKind,
     Attribution,
     DecisionReason,
@@ -48,7 +49,7 @@ from ciso.common.enums import (
     KillCapability,
     Role,
 )
-from ciso.common.ids import EntityRef
+from ciso.common.ids import EntityRef, new_id
 from ciso.common.principal import Principal
 from ciso.common.protocols import AuditEvent, AuditSink, KillSwitchReader, PrincipalResolver
 from ciso.governance.action_classes import action_analysis, shell_needs_inspection
@@ -66,8 +67,6 @@ from ciso.governance.rules import (
 
 logger = logging.getLogger(__name__)
 
-#: The kind of entity a person reference names (`actor:<id>`, set by `ciso.agents`).
-PERSON_REF_KIND = "actor"
 #: Timestamp used only if the clock itself fails (the decision is a deny anyway).
 _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 
@@ -259,6 +258,7 @@ class GovernanceEngine:
         self, action: ObservedAction, attribution: Attribution, outcome: _Outcome, now: datetime
     ) -> GovernanceDecision:
         return GovernanceDecision(
+            decision_id=new_id("dec"),
             action_id=action.action_id,
             session_id=action.session_id,
             verdict=_VERDICT[outcome.effect],
@@ -297,6 +297,7 @@ class GovernanceEngine:
         self, action: ObservedAction, decision: GovernanceDecision, outcome: _Outcome
     ) -> AuditEvent:
         details: dict[str, Any] = {
+            "decision_id": decision.decision_id,
             "action_id": action.action_id,
             "session_id": action.session_id,
             "kind": action.kind.value,

@@ -12,7 +12,12 @@ import re
 from collections.abc import Collection, Iterable, Mapping
 from typing import Final
 
-from ciso.common.activity import ActionKind, InspectionInput, InspectionResult
+from ciso.common.activity import (
+    MAX_INSPECTION_CHARS,
+    ActionKind,
+    InspectionInput,
+    InspectionResult,
+)
 from ciso.common.errors import ValidationFailed
 from ciso.inspection._collect import Collector, location
 from ciso.inspection.code_scan import scan_code
@@ -30,8 +35,10 @@ from ciso.inspection.rules import (
 from ciso.inspection.sandbox import from_sandbox_report
 from ciso.inspection.secret_scan import scan_secrets
 
-#: Largest text (content, command or diff) inspected, in characters.
-MAX_CONTENT_CHARS: Final = 1_048_576
+#: Largest text (content, command or diff) inspected, in characters. The shared contract
+#: refuses an `InspectionInput` whose content is longer, so through `Inspector.inspect`
+#: this limit is enforced at construction; `inspect_diff` still checks it for raw text.
+MAX_CONTENT_CHARS: Final = MAX_INSPECTION_CHARS
 #: Longest single line inspected; longer lines make the result incomplete.
 MAX_LINE_CHARS: Final = 8192
 

@@ -517,10 +517,18 @@ def main(
     hostname: Callable[[], str] = socket.gethostname,
     is_windows: bool = sys.platform == "win32",
     getuser: Callable[[], str] = posix_or_env_user,
+    isolated: bool = bool(sys.flags.isolated),
 ) -> int:
+    """Run one hook. Unless the interpreter runs isolated (`python -I`: no PYTHONPATH,
+    PYTHONSTARTUP, user site or script-directory imports a user could plant), nothing is
+    sent: decide mode blocks and report mode drops the record with a log line."""
     mode = argv[1] if len(argv) == 2 else ""
     machine = Machine(hostname, is_windows, getuser)
-    if mode == "report":
+    if not isolated:
+        stdin.read()
+        log_line(environ, mode or "unknown", "", "refused:not_isolated")
+        result = HookOutput(0) if mode == "report" else block_output(None)
+    elif mode == "report":
         result = run_report(stdin.read(), environ, transport, machine)
     elif mode == "decide":
         result = run_decide(stdin.read(), environ, transport, machine)

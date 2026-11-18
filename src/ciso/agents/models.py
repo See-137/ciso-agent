@@ -12,7 +12,7 @@ from typing import Annotated
 
 from pydantic import Field, field_validator, model_validator
 
-from ciso.common.activity import AgentClass, Text, clean_text
+from ciso.common.activity import PERSON_REF_KIND, AgentClass, Text, clean_text
 from ciso.common.enums import InformationState
 from ciso.common.errors import AuthorizationError, Conflict, NotFound, ValidationFailed
 from ciso.common.ids import EntityRef
@@ -27,8 +27,8 @@ MAX_LIST = 500
 #: Longest display name.
 MAX_NAME_CHARS = 200
 
-#: Reference kind for a person (an identity actor) and for an agent record.
-PERSON_REF_KIND = "actor"
+#: Reference kind for an agent record. The person kind (`PERSON_REF_KIND`, an identity
+#: actor) is the shared contract's constant, re-exported here for existing callers.
 AGENT_REF_KIND = "agent"
 #: Fact kind under which a session's device name is matched.
 DEVICE_FACT = "device"

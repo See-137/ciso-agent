@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import json
+from pathlib import Path
 from types import ModuleType
 from typing import Any
 
@@ -18,9 +19,6 @@ from tests.integrations.claude_code.conftest import (
 
 pytestmark = pytest.mark.unit
 
-DECIDE_EVENTS = ("PreToolUse", "UserPromptSubmit", "SessionStart")
-REPORT_EVENTS = ("PostToolUse", "SubagentStart", "SubagentStop", "Stop", "SessionEnd")
-
 
 @pytest.fixture(scope="module")
 def checker() -> ModuleType:
@@ -32,10 +30,6 @@ def hooks_config() -> dict[str, Any]:
     data = json.loads((PLUGIN_ROOT / "hooks" / "hooks.json").read_text(encoding="utf-8"))
     assert isinstance(data, dict)
     return data
-
-
-def handlers(config: dict[str, Any], event: str) -> list[dict[str, Any]]:
-    return [h for group in config["hooks"][event] for h in group["hooks"]]
 
 
 def test_manifest_names_the_plugin() -> None:
@@ -53,90 +47,24 @@ def test_marketplace_lists_the_plugin() -> None:
     assert [(p["name"], p["source"]) for p in market["plugins"]] == [("ai-governance", "./plugin")]
 
 
-def test_hooks_file_has_the_documented_wrapper(hooks_config: dict[str, Any]) -> None:
+def test_the_plugin_declares_no_hooks(hooks_config: dict[str, Any], checker: ModuleType) -> None:
+    """Enforcement lives in the managed settings; plugin files are user-writable."""
     assert set(hooks_config) == {"description", "hooks"}
-    assert set(hooks_config["hooks"]) == set(DECIDE_EVENTS) | set(REPORT_EVENTS)
+    assert hooks_config["hooks"] == {}
+    assert checker.plugin_declares_hooks(PLUGIN_ROOT) is False
 
 
-@pytest.mark.parametrize("event", DECIDE_EVENTS)
-def test_decide_hooks_block_on_failure(hooks_config: dict[str, Any], event: str) -> None:
-    found = handlers(hooks_config, event)
-    assert len(found) == 1
-    hook = found[0]
-    assert hook["type"] == "command"
-    assert hook["command"] == "python3"
-    assert hook["args"] == ["${CLAUDE_PLUGIN_ROOT}/scripts/hook_client.py", "decide"]
-    assert hook["onFailure"] == "block"
-    assert isinstance(hook["timeout"], int)
-    assert hook["timeout"] > 0
-    assert "async" not in hook
-    assert "asyncRewake" not in hook
-
-
-def test_pretooluse_matches_every_tool(hooks_config: dict[str, Any]) -> None:
-    groups = hooks_config["hooks"]["PreToolUse"]
-    assert [g["matcher"] for g in groups] == ["*"]
-
-
-@pytest.mark.parametrize("event", REPORT_EVENTS)
-def test_report_hooks_never_block(hooks_config: dict[str, Any], event: str) -> None:
-    found = handlers(hooks_config, event)
-    assert len(found) == 1
-    hook = found[0]
-    assert hook["args"] == ["${CLAUDE_PLUGIN_ROOT}/scripts/hook_client.py", "report"]
-    assert hook.get("onFailure", "continue") == "continue"
-    assert isinstance(hook["timeout"], int)
-
-
-def test_checker_accepts_the_shipped_hooks(
-    checker: ModuleType, hooks_config: dict[str, Any]
+def test_the_checker_refuses_a_plugin_that_declares_hooks(
+    checker: ModuleType, hooks_config: dict[str, Any], tmp_path: Path
 ) -> None:
-    assert checker.plugin_hook_errors(hooks_config) == []
-
-
-@pytest.mark.parametrize("event", DECIDE_EVENTS)
-@pytest.mark.parametrize("field", ["onFailure", "timeout"])
-def test_checker_rejects_a_decide_hook_missing_a_guard(
-    checker: ModuleType, hooks_config: dict[str, Any], event: str, field: str
-) -> None:
+    plugin = tmp_path / "plugin"
+    (plugin / "hooks").mkdir(parents=True)
     mutated = copy.deepcopy(hooks_config)
-    del mutated["hooks"][event][0]["hooks"][0][field]
-    errors = checker.plugin_hook_errors(mutated)
-    assert any(event in e and field in e for e in errors), errors
-
-
-@pytest.mark.parametrize(
-    "change",
-    [
-        ("onFailure", "continue"),
-        ("async", True),
-        ("timeout", 0),
-        ("timeout", "15"),
-    ],
-)
-def test_checker_rejects_weakened_decide_hook(
-    checker: ModuleType, hooks_config: dict[str, Any], change: tuple[str, Any]
-) -> None:
-    mutated = copy.deepcopy(hooks_config)
-    key, value = change
-    mutated["hooks"]["PreToolUse"][0]["hooks"][0][key] = value
-    assert checker.plugin_hook_errors(mutated) != []
-
-
-def test_checker_rejects_missing_decide_event(
-    checker: ModuleType, hooks_config: dict[str, Any]
-) -> None:
-    mutated = copy.deepcopy(hooks_config)
-    del mutated["hooks"]["UserPromptSubmit"]
-    assert any("UserPromptSubmit" in e for e in checker.plugin_hook_errors(mutated))
-
-
-def test_checker_rejects_narrowed_pretooluse_matcher(
-    checker: ModuleType, hooks_config: dict[str, Any]
-) -> None:
-    mutated = copy.deepcopy(hooks_config)
-    mutated["hooks"]["PreToolUse"][0]["matcher"] = "Bash"
-    assert any("matcher" in e for e in checker.plugin_hook_errors(mutated))
+    mutated["hooks"] = {"PreToolUse": [{"matcher": "*", "hooks": [{"type": "command"}]}]}
+    (plugin / "hooks" / "hooks.json").write_text(json.dumps(mutated), encoding="utf-8")
+    assert checker.plugin_declares_hooks(plugin) is True
+    report = checker.check_pack(MANAGED_ROOT, plugin)
+    assert any("declares hooks" in e for e in report.errors)
 
 
 def test_bundled_client_is_identical_to_the_source() -> None:

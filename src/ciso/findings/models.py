@@ -205,7 +205,7 @@ class FindingSummary(Model):
 
 @runtime_checkable
 class PersonLinkResolver(Protocol):
-    """Which company person (`person:<id>` reference) a platform actor is, NOW.
+    """Which person (a `PERSON_REF_KIND` reference, `actor:<id>`) a platform actor is, NOW.
 
     `Principal` carries no person reference, so "the person this finding is about" needs
     this second lookup. Return None when the actor has no person or is unknown; raise when

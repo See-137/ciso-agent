@@ -15,6 +15,9 @@ policy"):
 - ``windows/managed-settings.json`` -> C:\\Program Files\\ClaudeCode\\managed-settings.json
 - ``windows/ClaudeCode-policy.reg`` -> HKLM\\SOFTWARE\\Policies\\ClaudeCode, REG_SZ ``Settings``
 
+Each platform's settings carry the enforcing hooks in the ``hooks`` key, running the
+admin-installed interpreter and client named in ``platform_hook``.
+
 The output is deterministic, so a test can prove the committed files match the source.
 Run ``check_pack.py`` afterwards. Standard library only.
 """
@@ -101,7 +104,10 @@ def build(source: dict[str, Any]) -> dict[str, bytes]:
     checker = _checker()
     policies = {
         platform: checker.merge_platform(
-            source["policy"], source["platform_env"][platform], source["platform_deny"][platform]
+            source["policy"],
+            source["platform_env"][platform],
+            source["platform_deny"][platform],
+            checker.managed_hooks(source["hook_timeouts"], source["platform_hook"][platform]),
         )
         for platform in ("windows", "macos", "linux")
     }

@@ -62,6 +62,7 @@ class Collector:
                 severity=rule.severity,
                 detail=rule.detail,
                 location=where,
+                remediation=rule.remediation,
             )
         )
 
@@ -90,6 +91,7 @@ class Collector:
                     category=FINDINGS_TRUNCATED.category,
                     severity=FINDINGS_TRUNCATED.severity,
                     detail=FINDINGS_TRUNCATED.detail,
+                    remediation=FINDINGS_TRUNCATED.remediation,
                     location=f"{dropped} findings dropped",
                 )
             )

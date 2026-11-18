@@ -12,13 +12,14 @@ The wire contract is `docs/skill/decision-api.md`. The product is `docs/skill/sp
 |---|---|---|
 | `.claude-plugin/marketplace.json` | Company marketplace `corp-ai-governance` | Lists the plugin. Push this folder (or a copy of it) to the company git host; the managed pack registers it on every machine. |
 | `plugin/.claude-plugin/plugin.json` | Plugin manifest, `ai-governance` | Names the plugin. Its full id is `ai-governance@corp-ai-governance`. |
-| `plugin/hooks/hooks.json` | Hooks | **Decide** (sent to the service before the action, blocks on any failure): `PreToolUse` (matcher `*`, every tool), `UserPromptSubmit`, `SessionStart`. Each decide hook has an explicit `timeout` (15 s) and `"onFailure": "block"`. **Report** (sent afterwards, never blocks): `PostToolUse`, `SubagentStart`, `SubagentStop`, `Stop`, `SessionEnd`. |
+| managed settings, `hooks` key | Hooks (enforcement) | Generated into every platform's managed settings from `pack_source.json` (`hook_timeouts`, `platform_hook`). **Decide** (sent to the service before the action, blocks on any failure): `PreToolUse` (matcher `*`, every tool), `UserPromptSubmit`, `SessionStart`. Each decide hook has an explicit `timeout` (15 s) and `"onFailure": "block"`. **Report** (sent afterwards, never blocks): `PostToolUse`, `SubagentStart`, `SubagentStop`, `Stop`, `SessionEnd`. Every hook runs an admin-installed interpreter in isolated mode (`-I`: no `PYTHONPATH`, `PYTHONSTARTUP`, user site directory or script-directory imports, so a user's environment cannot replace the client's code) on the admin-owned client copy (paths below), never a file in the user's data folder. The client itself sends nothing unless it runs isolated: decide mode blocks, report mode drops the record. `allowManagedHooksOnly` stays on, so user, project and plugin hooks cannot add to or replace them. |
+| `plugin/hooks/hooks.json` | No hooks | Declares an empty `hooks` object. The checker refuses a plugin that declares any hook. |
 | `plugin/skills/ai-governance/SKILL.md` | Advisory skill | Tells the agent the company's AI-use rules, that its actions are checked, how to read a refusal (the decision id) and what to do instead (ask the person, open a ticket). It advises only; the hooks enforce. |
-| `client/hook_client.py` | Hook client, the source copy | Single file, standard library only, targets **Python 3.10+**. Reads the hook JSON on stdin and adds the claims: `os_account` (`DOMAIN\user` on Windows from the environment, the account name elsewhere), the device (host name) and the surface. Posts to the service and maps the answer to the documented hook output. |
-| `plugin/scripts/hook_client.py` | Hook client, the bundled copy | Byte-identical to `client/hook_client.py`; a test enforces this. It exists because a plugin can only run files inside its own root. Edit `client/`, then copy the file. |
+| `client/hook_client.py` | Hook client | IT installs this file, unchanged, at the admin-owned path of `platform_hook.client`: `C:\Program Files\AIGovernance\hook_client.py` (Windows), `/Library/Application Support/AIGovernance/hook_client.py` (macOS), `/usr/local/lib/ai-governance/hook_client.py` (Linux). The vendor documents no location for hook scripts; these sit next to the token directory (macOS) or in the platform's admin-only program location. Single file, standard library only, targets **Python 3.10+**. Reads the hook JSON on stdin and adds the claims: `os_account` (`DOMAIN\user` on Windows from the environment, the account name elsewhere), the device (host name) and the surface. Posts to the service and maps the answer to the documented hook output. |
+| `plugin/scripts/hook_client.py` | Obsolete copy | No hook references it any more. It is still byte-identical to `client/hook_client.py` (a test enforces this) until the owner approves deleting it. |
 | `managed/pack_source.json` | Policy pack source | The one file IT edits. Values containing `REPLACE_ME` are placeholders. |
 | `managed/build_pack.py` | Builder | Writes the per-platform artifacts below from the source. Its output is deterministic, and a test checks that the committed artifacts match the source. |
-| `managed/check_pack.py` | Checker | Exit 0 means READY. Exit 1 means NOT READY: placeholders remain. Exit 2 means INVALID: a control is missing or weakened, the artifacts disagree, or a plugin decide hook lacks a timeout or `onFailure: "block"`. |
+| `managed/check_pack.py` | Checker | Exit 0 means READY. Exit 1 means NOT READY: placeholders remain. Exit 2 means INVALID: a control is missing or weakened, the artifacts disagree, a managed decide hook lacks a timeout or `onFailure: "block"`, a hook runs a relative or user-writable interpreter or client path, or the plugin declares hooks. |
 | `managed/{linux,macos,windows}/managed-settings.json` | File-based managed settings | Install as `/etc/claude-code/managed-settings.json`, `/Library/Application Support/ClaudeCode/managed-settings.json` or `C:\Program Files\ClaudeCode\managed-settings.json`. |
 | `managed/windows/ClaudeCode-policy.reg` | Windows HKLM policy | REG_SZ value `Settings` under `HKLM\SOFTWARE\Policies\ClaudeCode`, holding the whole JSON. |
 | `managed/windows/admx/` | Group Policy template | ADMX/ADML that writes the same `Settings` value. Written here; it was not tested in a Group Policy editor. |
@@ -53,20 +54,21 @@ The wire contract is `docs/skill/decision-api.md`. The product is `docs/skill/sp
 
 ## Deployment
 
-The developer's machine needs Claude Code **2.1.316 or later** (the pack sets `requiredMinimumVersion`; `onFailure` needs 2.1.295+), `python3` on the PATH (3.10+), and read access to the company marketplace repository.
+The developer's machine needs Claude Code **2.1.316 or later** (the pack sets `requiredMinimumVersion`; `onFailure` needs 2.1.295+), the interpreter named in `platform_hook.command` (Python 3.10+, installed by IT: on Windows the pack expects `C:\Program Files\AIGovernance\python\python.exe`, for example the embeddable distribution; on macOS `/Library/Application Support/AIGovernance/python/bin/python3`; on Linux `/usr/bin/python3`), and read access to the company marketplace repository (for the advisory skill).
 
 1. **Push the marketplace.** Put this folder in a company git repository and fill in `pack_source.json`:
    - `REPLACE_ME_MARKETPLACE_GIT_URL`: that repository's https clone URL.
    - `REPLACE_ME_ORG_UUID`: the Claude Enterprise organization UUID.
    - `REPLACE_ME_SERVICE_HOST`: the governance service host.
 2. **Build and check.** From this folder, run `python3 managed/build_pack.py`, then `python3 managed/check_pack.py managed`. Deploy only on `RESULT: READY`.
-3. **Issue a device token per machine** (see below) and write it to the token file:
+3. **Install the client** (`client/hook_client.py`) and the interpreter at the `platform_hook` paths, owned by administrators and not writable by users.
+4. **Issue a device token per machine** (see below) and write it to the token file:
    - Windows: `C:\ProgramData\AIGovernance\device-token`
    - macOS: `/Library/Application Support/AIGovernance/device-token`
    - Linux: `/etc/ai-governance/device-token`
 
    Set the file ACL to: administrators write, the machine's users read. Users must be able to read it, because the hook runs as the user.
-4. **Deliver the policy:**
+5. **Deliver the policy:**
    - **Windows, domain-joined:** use a Group Policy Object, Computer Configuration.
      - Option a: import `windows/admx` into the central store and enable "Claude Code managed settings (JSON)" with the one-line JSON from `windows/managed-settings.json`.
      - Option b (simpler for long JSON): a Group Policy Preferences registry item that writes REG_SZ `Settings` under `HKLM\SOFTWARE\Policies\ClaudeCode`, with the value from `ClaudeCode-policy.reg`.
@@ -74,8 +76,8 @@ The developer's machine needs Claude Code **2.1.316 or later** (the pack sets `r
      - The vendor publishes Group Policy and Intune starter templates at https://github.com/anthropics/claude-code/tree/main/examples/mdm. They were not fetched for this build; compare them before rollout.
    - **macOS:** upload `macos/com.anthropic.claudecode.mobileconfig` to the MDM (Jamf, Intune or similar) as a system-scope profile. Without MDM, install `macos/managed-settings.json` as `/Library/Application Support/ClaudeCode/managed-settings.json` (root-owned).
    - **Linux:** install `linux/managed-settings.json` as `/etc/claude-code/managed-settings.json` (root-owned, 0644) with the configuration tool you already use.
-5. **If the organization also uses server-managed settings** (claude.ai admin console): with the default `managedSourcesBehavior` `"first-wins"`, a server-managed policy that has any key **hides this whole pack**, apart from `env` and the login keys. Either put the same keys in the console, or set `managedSourcesBehavior: "merge"` there. This is an owner decision.
-6. **Confirm** on one machine:
+6. **If the organization also uses server-managed settings** (claude.ai admin console): with the default `managedSourcesBehavior` `"first-wins"`, a server-managed policy that has any key **hides this whole pack**, apart from `env` and the login keys. Either put the same keys in the console, or set `managedSourcesBehavior: "merge"` there. This is an owner decision.
+7. **Confirm** on one machine:
    - `/status` shows the managed source.
    - `/plugin` lists `ai-governance@corp-ai-governance`.
    - A command the service denies is refused with a decision id.
@@ -84,13 +86,13 @@ The developer's machine needs Claude Code **2.1.316 or later** (the pack sets `r
 
 The contract (`docs/skill/decision-api.md`) says the service issues one device token per managed machine. The token belongs to an actor of type `service` named for the device, and is sent as `Authorization: Bearer <token>`. It proves which machine reported, not which person.
 
-The issuing call belongs to the governance service's API and is being built by another lane. The contract does not name an endpoint, so none is named here. The expected flow:
+The service issues it:
 
-1. An administrator authenticated to the service requests a token for a named device.
+1. A `security_admin` calls `POST /v1/devices` with `{"name": "<host name>"}`. The answer holds `device_id` and the `token`, shown once; the service stores only its hash, and the token expires within the service's `max_token_ttl_seconds`.
 2. The token goes straight into the device's token file through the endpoint-management tool.
-3. The token is rotated or revoked in the service.
+3. `DELETE /v1/devices/{device_id}` revokes the device and every token it holds. Re-register the machine to rotate.
 
-The service then sees the device name both in the token's actor and in the request's `device` field, and can flag any mismatch.
+The decide and activity routes accept only device tokens: a person's token is refused with 403. The service does not yet compare the token's device name with the request's `device` field.
 
 ## What this cannot see or stop
 
@@ -108,9 +110,9 @@ From the spec's coverage section (section 5), and from the docs:
 - **Cloud sessions** in Anthropic-hosted environments do not read this machine's pack. They need server-managed settings or the central gate (C4).
 - **Identity:** the `os_account` claim is read from the environment and is never marked verified. The user controls their own environment, so it is a hint for the service, not proof.
 - **The device token can be read by the user,** because the hook runs as the user. The user could replay it from another tool. It identifies the machine only.
-- **First session after rollout:** if the marketplace cannot be cloned (no git access) or the plugin has not installed yet, no plugin hooks run, and the session is not checked. `CLAUDE_CODE_SYNC_PLUGIN_INSTALL=1` makes `-p` runs wait for the install. For seeded images see `CLAUDE_CODE_PLUGIN_SEED_DIR` in the org-plugins docs.
-- **Plugin files are user-writable.** The installed plugin's files live in the user's own Claude Code data folder, so a user could edit the cached client. The pack denies the agent's own Edit tool there, but not the user.
-  - A stronger option, for owner decision: put the same hooks in the **managed settings `hooks` key**, pointing at an admin-owned copy of the client with an absolute interpreter path. That also removes the dependency on `python3` being found on the user's PATH.
+- **First session after rollout:** the hooks come with the managed settings, so they run from the first session. Only the advisory skill comes with the plugin; if the marketplace cannot be cloned the agent lacks the advice, not the checks. `CLAUDE_CODE_SYNC_PLUGIN_INSTALL=1` makes `-p` runs wait for the install. For seeded images see `CLAUDE_CODE_PLUGIN_SEED_DIR` in the org-plugins docs.
+- **Pushes and commits are refused for now.** A hook report does not carry the change being pushed or committed, so its inspection is incomplete and the ruleset's `missing_inspection: deny` refuses it (also inside a longer shell command). The engineer sees the rule's message plus a fixed note that pushes by AI agents are held until the pre-push scan exists, and should push by hand after review. The sandbox lane (change upload and the asynchronous pre-push scan) lifts this.
+- **PowerShell commands** (the assistant's `PowerShell` tool on Windows) are read by a POSIX shell grammar; syntax it cannot read is `unparseable` and is never allowed automatically.
 - **Machine administrators** can edit or remove the managed source. MDM redeployment is the documented mitigation.
 - **`SessionStart` cannot block.** Measured here: a `continue: false` from `SessionStart` did not stop a `-p` session. The prompt and tool hooks are what stop actions.
 - **`SessionEnd` reports can be lost.** Claude Code gives all `SessionEnd` hooks a 1.5-second budget, and plugin timeouts do not raise it. In the local test the `SessionEnd` report was cancelled when the service was down.
@@ -132,7 +134,31 @@ Each was considered and left out:
 
 Each is a policy choice beyond "keep the controls on". Tool calls made through MCP servers and auto mode still pass through the `PreToolUse` hook.
 
-## Local test, measured 2026-11-18 (Claude Code 2.1.316, Windows 11, model haiku)
+## End-to-end test against the real service, measured 2026-11-19 (Claude Code 2.1.316, Windows 11, model haiku)
+
+Setup: the governance API (`python -m ciso.api`) on `127.0.0.1:18766` with a scratch data
+directory and the provisional settings (deployment ruleset
+`config/governance-ruleset.provisional.json`); a test admin from
+`python -m ciso.app.admin bootstrap`; an employee actor bound to this machine's
+`DOMAIN\user` account; an approved employee-operated agent identified by the host name; a
+device registered through `POST /v1/devices`, its token in a file. A throwaway `--settings`
+file held the hooks exactly as `managed_hooks` generates them (venv interpreter with `-I`,
+the real `client/hook_client.py`) plus the `env` block; `--setting-sources project`,
+`--no-session-persistence`. The repository was a throwaway git repo with a local bare
+remote.
+
+| Run | Service decision | Result |
+|---|---|---|
+| 1, `git status --short --branch` | SessionStart, prompt, PreToolUse all `allow` (`rule_allow`, class `read_only_command`); PostToolUse, Stop, SessionEnd recorded | command ran, output returned |
+| 2, `git push --force origin main` | `deny` (`rule_deny`, `inspection_incomplete`) | the agent showed "Blocked by company policy ... Pushes and commits by AI agents are held until the pre-push scan ... (AI-governance decision dec_...)"; remote unchanged |
+| 3, Write tool on `.mcp.json` (`--allowedTools Bash,Write`) | `deny` (`critical_finding`, `agent_config_change`) | file not created |
+
+Afterwards: four findings (both denials and their inspection findings, attributed to the
+person and the agent), three alert files under `data/alerts`, and `GET /v1/audit/verify`
+returned `ok`. `Stop` events are recorded as `turn_end`, and the default ruleset answers
+them `ask` (no rule covers that kind yet).
+
+## Local test, measured 2026-11-18 (plugin hooks, before the move to managed hooks) (Claude Code 2.1.316, Windows 11, model haiku)
 
 Setup:
 

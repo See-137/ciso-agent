@@ -131,8 +131,22 @@ MUTATIONS: list[tuple[str, Any]] = [
     ("env.AIGOV_SERVICE_URL", "http://governance.corp.example"),
     ("env.AIGOV_DECIDE_TIMEOUT_SECONDS", None),
     ("env.AIGOV_DECIDE_TIMEOUT_SECONDS", "60"),
-    ("env.CLAUDE_CODE_SYNC_PLUGIN_INSTALL", None),
+    ("hooks", None),
+    ("hooks.PreToolUse", None),
+    ("hooks.UserPromptSubmit", None),
+    ("hooks.Stop", None),
 ]
+
+
+def linux_policy(checker: ModuleType, source: dict[str, Any]) -> dict[str, Any]:
+    hooks = checker.managed_hooks(source["hook_timeouts"], source["platform_hook"]["linux"])
+    merged: dict[str, Any] = checker.merge_platform(
+        fill(source["policy"]),
+        fill(source["platform_env"]["linux"]),
+        source["platform_deny"]["linux"],
+        hooks,
+    )
+    return merged
 
 
 def _mutate(policy: dict[str, Any], dotted: str, value: Any) -> dict[str, Any]:
@@ -152,12 +166,10 @@ def _mutate(policy: dict[str, Any], dotted: str, value: Any) -> dict[str, Any]:
 def test_checker_refuses_a_weakened_policy(
     checker: ModuleType, source: dict[str, Any], dotted: str, value: Any
 ) -> None:
-    policy = fill(source["policy"])
-    env = fill(source["platform_env"]["linux"])
-    merged = checker.merge_platform(policy, env, source["platform_deny"]["linux"])
-    assert checker.policy_errors(merged, PLUGIN_ROOT, "linux") == []
+    merged = linux_policy(checker, source)
+    assert checker.policy_errors(merged, "linux") == []
     weakened = _mutate(merged, dotted, value)
-    assert checker.policy_errors(weakened, PLUGIN_ROOT, "linux") != []
+    assert checker.policy_errors(weakened, "linux") != []
 
 
 def test_checker_detects_artifacts_that_disagree(

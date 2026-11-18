@@ -201,7 +201,8 @@ class FindingsService(Access):
             verdict=decision.verdict,
             last_decision_id=decision_id,
             evidence_refs=rules.evidence_refs(decision_id, decision, action),
-            recommendation=self._catalog.text_for(draft.origin, draft.recommendation_key),
+            recommendation=draft.remediation
+            or self._catalog.text_for(draft.origin, draft.recommendation_key),
             occurrences=1,
             first_seen=now,
             last_seen=now,

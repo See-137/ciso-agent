@@ -39,11 +39,15 @@ class Readiness(Model):
     """`missing`: what blocks write paths (empty means ready). `warnings`: what weakens
     tamper evidence or monitoring without stopping anything
     (`Settings.integrity_warnings()`, a witness or anchor under the data directory,
-    untimed health checks)."""
+    untimed health checks). `governance`: what the governance services lack."""
 
     ready: bool
     missing: tuple[str, ...]
     warnings: tuple[str, ...] = ()
+    #: What the AI-activity governance services run without (unset values, a ruleset that
+    #: did not load). Each makes its own part refuse; none blocks the platform's writes or
+    #: weakens tamper evidence, so it is listed apart (`ciso.app.governance_wiring`).
+    governance: tuple[str, ...] = ()
 
 
 def unusable_refs(settings: Settings, store: EnvSecretStore) -> dict[str, str]:

@@ -2,7 +2,8 @@
   "_comment": [
     "Source of the managed policy pack. Edit this file, then run build_pack.py to regenerate the per-platform artifacts, then check_pack.py.",
     "Every value containing REPLACE_ME is a placeholder; check_pack.py reports the pack NOT READY while any remains.",
-    "Timeouts in env are PROVISIONAL values (owner decision pending); the hook client refuses to run decide mode without them."
+    "Timeouts in env and hook_timeouts are PROVISIONAL values (owner decision pending); the hook client refuses to run decide mode without them.",
+    "The enforcing hooks are generated into the managed settings `hooks` key from hook_timeouts and platform_hook (an admin-installed interpreter and an admin-owned copy of client/hook_client.py). The plugin carries the advisory skill only."
   ],
   "policy": {
     "forceLoginMethod": "claudeai",
@@ -70,6 +71,11 @@
       "AI activity in Claude Code on this machine is checked and recorded by the company AI-governance service. Refused actions show a decision id; quote it when you contact the security team."
     ]
   },
+  "hook_timeouts": {
+    "decide": 15,
+    "report": 5,
+    "SessionEnd": 2
+  },
   "platform_env": {
     "windows": {
       "AIGOV_DEVICE_TOKEN_FILE": "C:\\ProgramData\\AIGovernance\\device-token"
@@ -84,7 +90,8 @@
   "platform_deny": {
     "windows": [
       "Read(//c/ProgramData/AIGovernance/**)",
-      "Edit(//c/ProgramData/AIGovernance/**)"
+      "Edit(//c/ProgramData/AIGovernance/**)",
+      "Edit(//c/Program Files/AIGovernance/**)"
     ],
     "macos": [
       "Read(//Library/Application Support/AIGovernance/**)",
@@ -92,7 +99,22 @@
     ],
     "linux": [
       "Read(//etc/ai-governance/**)",
-      "Edit(//etc/ai-governance/**)"
+      "Edit(//etc/ai-governance/**)",
+      "Edit(//usr/local/lib/ai-governance/**)"
     ]
+  },
+  "platform_hook": {
+    "windows": {
+      "command": "C:\\Program Files\\AIGovernance\\python\\python.exe",
+      "client": "C:\\Program Files\\AIGovernance\\hook_client.py"
+    },
+    "macos": {
+      "command": "/Library/Application Support/AIGovernance/python/bin/python3",
+      "client": "/Library/Application Support/AIGovernance/hook_client.py"
+    },
+    "linux": {
+      "command": "/usr/bin/python3",
+      "client": "/usr/local/lib/ai-governance/hook_client.py"
+    }
   }
 }

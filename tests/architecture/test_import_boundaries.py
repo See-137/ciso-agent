@@ -213,6 +213,13 @@ IMPORTERS: dict[str, frozenset[str]] = {
             "ciso.app",
         }
     ),
+    # AI-activity governance: built only by the composition root and reached by the API
+    # only through the router named for each (docs/skill/spec-draft.md, C3).
+    "ciso.agents": frozenset({"ciso.app", "ciso.api.routers.agents"}),
+    "ciso.findings": frozenset({"ciso.app", "ciso.api.routers.findings"}),
+    "ciso.governance": frozenset({"ciso.app"}),
+    "ciso.inspection": frozenset({"ciso.app"}),
+    "ciso.intake": frozenset({"ciso.app"}),
     # The container holds every service object, so importing it is importing all of them.
     "ciso.app": frozenset({"ciso.api"}),
     "ciso.api": frozenset(),

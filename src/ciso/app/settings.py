@@ -16,6 +16,7 @@ from typing import Annotated, Any, Final
 
 from pydantic import Field, model_validator
 
+from ciso.app.governance_settings import GovernanceSettings
 from ciso.common.classification import ClassificationScheme
 from ciso.common.enums import APPROVER_ROLES, Role
 from ciso.common.errors import ValidationFailed
@@ -143,6 +144,8 @@ class Settings(Model):
     external_digest_key_ref: str | None = None
     safety: SafetySettings = SafetySettings()
     external_inference: ExternalInferenceSettings = ExternalInferenceSettings()
+    #: AI-activity governance (`ciso.app.governance_settings`). Unset values refuse.
+    governance: GovernanceSettings = GovernanceSettings()
 
     @model_validator(mode="after")
     def _check(self) -> Settings:

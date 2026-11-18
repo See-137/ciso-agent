@@ -43,6 +43,22 @@ PERMISSIONS: Mapping[str, str] = MappingProxyType(
         "risk.accept": "Accept business risk or grant a policy exception.",
         "report.submit": "Report an issue, ask for guidance, declare ownership or context.",
         "report.read_own": "Read one's own reports and the instructions sent to oneself.",
+        "finding.acknowledge": (
+            "Acknowledge a finding. The findings service allows it only for an administrator "
+            "or the person the finding is about."
+        ),
+        "governance.read": "Read the AI-agent registry, coverage gaps and governed sessions.",
+        "agents.manage": (
+            "Register, approve, classify, un-suspend and retire AI agents; bind identity claims."
+        ),
+        "agents.suspend": (
+            "Suspend an AI agent. The registry allows it only for an administrator or the "
+            "agent's own owner or operator."
+        ),
+        "governance.report": (
+            "Report AI-agent activity and ask for a decision. Held only by registered device "
+            "actors (ciso.app.devices); no role template grants it."
+        ),
     }
 )
 
@@ -74,9 +90,14 @@ ROLE_TEMPLATES: tuple[RoleTemplate, ...] = (
                 "audit.read",
                 "registry.read",
                 "finding.read",
+                "finding.update",
+                "finding.acknowledge",
                 "approval.read",
                 "external_inference.request",
                 "external_inference.read",
+                "governance.read",
+                "agents.manage",
+                "agents.suspend",
             }
         ),
     ),
@@ -89,6 +110,8 @@ ROLE_TEMPLATES: tuple[RoleTemplate, ...] = (
                 "registry.read",
                 "finding.read",
                 "finding.update",
+                "finding.acknowledge",
+                "agents.suspend",
                 "approval.decide",
                 "approval.read",
                 "scope.approve",
@@ -111,6 +134,8 @@ ROLE_TEMPLATES: tuple[RoleTemplate, ...] = (
                 "approval.decide",
                 "approval.read",
                 "finding.read",
+                "finding.acknowledge",
+                "agents.suspend",
                 "registry.read",
                 "policy.read",
             }
@@ -123,7 +148,9 @@ ROLE_TEMPLATES: tuple[RoleTemplate, ...] = (
             "Reports issues, requests guidance, declares ownership and context, and receives "
             "security instructions. No access to other employees' sensitive information."
         ),
-        permissions=frozenset({"report.submit", "report.read_own"}),
+        permissions=frozenset(
+            {"report.submit", "report.read_own", "finding.acknowledge", "agents.suspend"}
+        ),
     ),
     RoleTemplate(
         role=Role.AUDITOR,
@@ -142,6 +169,7 @@ ROLE_TEMPLATES: tuple[RoleTemplate, ...] = (
                 "killswitch.read",
                 "approval.read",
                 "external_inference.read",
+                "governance.read",
             }
         ),
     ),

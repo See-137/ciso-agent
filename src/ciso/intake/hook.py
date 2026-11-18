@@ -12,7 +12,9 @@ marks one verified is refused.
 
 The action id is derived from the session id, the event and the tool_use_id (tool
 events), prompt_id (prompt and stop events), agent_id (subagent start) or the session
-start source, so a retried report is the same action. Two SessionStart reports for the
+start source, so a retried report is the same action. `Stop` (the agent ended its
+turn) and `SubagentStop` (a sub-agent did) map to `turn_end`; their final message text is
+never read. Two SessionStart reports for the
 same session and the same source (two resumes) get the same id; that is a known limit.
 """
 
@@ -58,6 +60,7 @@ EVENTS: Mapping[str, Phase] = {
     "SessionStart": Phase.AFTER,
     "SessionEnd": Phase.AFTER,
     "SubagentStart": Phase.AFTER,
+    "SubagentStop": Phase.AFTER,
     "Stop": Phase.AFTER,
 }
 
@@ -154,10 +157,12 @@ def _event_view(
         if not isinstance(prompt, str):
             raise refuse(RefusalCode.INVALID_FIELD)
         return correlation, "", prompt_view(prompt)
-    if event == "SubagentStart":
+    if event in ("SubagentStart", "SubagentStop"):
         correlation = _required_id(payload, "agent_id")
         agent_type = payload.get("agent_type")
         target = {"agent_type": _clean(agent_type)} if agent_type else {}
+        if event == "SubagentStop":
+            return correlation, "", ToolView(ActionKind.TURN_END, {**target, "event": event})
         return correlation, "", ToolView(ActionKind.SUBAGENT, target)
     if event == "SessionStart":
         source = payload.get("source", "unknown")
@@ -170,7 +175,7 @@ def _event_view(
         return "end", "", ToolView(ActionKind.SESSION_END, {})
     prompt_id = payload.get("prompt_id")
     correlation = "stop:" + (_matching(prompt_id, _IDENT) if prompt_id is not None else "")
-    return correlation, "", ToolView(ActionKind.OTHER_TOOL, {"event": event})
+    return correlation, "", ToolView(ActionKind.TURN_END, {"event": event})
 
 
 def normalize_hook_report(

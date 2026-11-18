@@ -30,6 +30,7 @@ from ciso.common.clock import Clock, FixedClock
 from ciso.common.db import create_db_engine, init_operational_schema
 from ciso.common.enums import InformationState
 from ciso.common.errors import FailClosed
+from ciso.common.ids import new_id
 from ciso.common.protocols import AuditEvent, AuditReceipt
 from ciso.findings import FindingsService, InMemoryAlertSink, RecommendationCatalog, tables
 
@@ -197,6 +198,7 @@ def decision(
     finding_refs: tuple[str, ...] = (),
 ) -> GovernanceDecision:
     return GovernanceDecision(
+        decision_id=new_id("dec"),
         action_id=action_id,
         session_id=session_id,
         verdict=verdict,
@@ -218,6 +220,7 @@ def decision(
 def inspection(
     *items: tuple[str, Severity] | tuple[str, Severity, str],
     action_id: str = "act_1",
+    remediation: str = "",
 ) -> InspectionResult:
     findings = []
     for item in items:
@@ -230,6 +233,7 @@ def inspection(
                 severity=severity,
                 detail="a problem was found",
                 location=location,
+                remediation=remediation,
             )
         )
     return InspectionResult(

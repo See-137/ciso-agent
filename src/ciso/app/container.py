@@ -34,6 +34,9 @@ may import that package). It is off unless `Settings.external_inference` says ot
 it reads the GATED kill switch, and `build_container` gives it no transport: this build
 ships none, so authorize and transmit refuse even when the path is switched on.
 
+AI-activity governance: one `GovernanceServices` (`ciso.app.governance_wiring`); what it
+runs without is listed in `Readiness.governance`.
+
 The execution broker is not wired here yet.
 """
 
@@ -47,6 +50,7 @@ from typing import IO, Self
 
 from sqlalchemy import Engine
 
+from ciso.agents import tables as agents_tables
 from ciso.app import tables as app_tables
 from ciso.app.approvals_wiring import build_approvals
 from ciso.app.audit_wiring import UnavailableAuditLog, build_witness, open_audit
@@ -57,6 +61,7 @@ from ciso.app.core_wiring import (
     build_killswitch,
     build_policy,
 )
+from ciso.app.governance_wiring import GovernanceServices, build_governance
 from ciso.app.health_checks import AUTH_AUDIT_GAUGE, register_health
 from ciso.app.killswitch_history import AuditKillSwitchHistory
 from ciso.app.killswitch_startup import run_startup
@@ -78,6 +83,7 @@ from ciso.audit import AuditLog, FileHeadWitness, HeadAnchor, init_audit_schema
 from ciso.common.clock import Clock, SystemClock
 from ciso.common.db import create_db_engine, init_operational_schema
 from ciso.common.protocols import AuditSink, KillSwitchReader, PrincipalResolver
+from ciso.findings import tables as findings_tables
 from ciso.identity import (
     PRODUCTION_SCRYPT,
     Authenticator,
@@ -105,9 +111,11 @@ logger = logging.getLogger(__name__)
 #: Every module whose tables live on the operational database. Importing them registers
 #: the tables, so `init_operational_schema` creates them.
 TABLE_MODULES = (
+    agents_tables,
     app_tables,
     approvals_tables,
     external_tables,
+    findings_tables,
     identity_tables,
     inference_tables,
     killswitch_tables,
@@ -168,6 +176,7 @@ class Container:
     #: The external model path (blueprint 8.4). Refuses unless settings switch it on; has
     #: no transport in this build.
     external_inference: ExternalInferenceGateway
+    governance: GovernanceServices
     metrics: MetricsRegistry
     health: HealthRegistry
     missing: tuple[str, ...]
@@ -180,6 +189,7 @@ class Container:
             ready=not self.missing,
             missing=self.missing,
             warnings=self.warnings,
+            governance=self.governance.warnings,
         )
 
     def close(self) -> None:
@@ -281,12 +291,16 @@ def _assemble(
     gate = run_startup(
         operational=operational, audit=audit, killswitch=killswitch, health=health, clock=clock
     )
-    warnings = startup_warnings(settings)
     missing = all_missing(settings, unusable.values(), audit_problems, gate.problems)
     catalog = OperationCatalog(())
     authenticator = build_authenticator(
         settings, engine=operational, clock=clock, audit=audit, identity=identity, scrypt=scrypt
     )
+    governance = build_governance(
+        settings, engine=operational, clock=clock, audit=audit, killswitch=gate.reader,
+        identity=identity, authenticator=authenticator, redactor=redactor, secrets=store,
+    )  # fmt: skip
+    warnings = startup_warnings(settings)
     inference = build_inference(
         settings, engine=operational, clock=clock, audit=audit, redactor=redactor
     )
@@ -343,6 +357,7 @@ def _assemble(
         inference=inference,
         approvals=approvals,
         external_inference=external,
+        governance=governance,
         metrics=metrics,
         health=health,
         missing=missing,
@@ -366,12 +381,9 @@ def build_external_gateway(
 ) -> ExternalInferenceGateway:
     """The external model gateway as `Settings` describe it (blueprint 8.4, ADR-0006).
 
-    The switch, approver role, allowed classifications and both byte limits come from
-    settings and are passed as they are: an unset one reaches the gateway as its refusing
-    default. `killswitch` must be the container's gated reader. A configured digest key
-    reference is passed even when it does not resolve, so the gateway refuses instead of
-    quietly storing unkeyed digests. `build_container` never passes `transport`: no
-    implementation ships. The parameter is the seam for one, and for tests.
+    Settings are passed as they are (unset: the gateway's refusing default); `killswitch`
+    must be the gated reader; an unresolvable digest key reference is passed so the gateway
+    refuses. `build_container` never passes `transport` (none ships): a seam for tests.
     """
     external = settings.external_inference
     return ExternalInferenceGateway(

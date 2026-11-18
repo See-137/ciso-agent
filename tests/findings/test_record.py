@@ -112,6 +112,14 @@ def test_recommendation_comes_from_the_catalog(svc: FindingsService) -> None:
     assert texts[FindingOrigin.INSPECTION] == "Remove the credential and rotate it."
 
 
+def test_the_checks_own_remediation_wins_over_the_catalog(svc: FindingsService) -> None:
+    result = inspection(("secrets.token", Severity.HIGH), remediation="Use the vault reference.")
+    out = svc.record(decision(Verdict.DENY), action(), result, decision_id="dec_1")
+    texts = {f.origin: f.recommendation for f in out.findings}
+    assert texts[FindingOrigin.INSPECTION] == "Use the vault reference."
+    assert texts[FindingOrigin.DECISION] == "Open a pull request instead of pushing."
+
+
 def test_missing_recommendation_gets_the_generic_text(svc: FindingsService) -> None:
     out = svc.record(
         decision(Verdict.DENY, code="unlisted_reason"), action(), None, decision_id="dec_1"

@@ -72,6 +72,195 @@
 			<array>
 				<string>REPLACE_ME_ORG_UUID</string>
 			</array>
+			<key>hooks</key>
+			<dict>
+				<key>PostToolUse</key>
+				<array>
+					<dict>
+						<key>hooks</key>
+						<array>
+							<dict>
+								<key>args</key>
+								<array>
+									<string>-I</string>
+									<string>/Library/Application Support/AIGovernance/hook_client.py</string>
+									<string>report</string>
+								</array>
+								<key>command</key>
+								<string>/Library/Application Support/AIGovernance/python/bin/python3</string>
+								<key>timeout</key>
+								<integer>5</integer>
+								<key>type</key>
+								<string>command</string>
+							</dict>
+						</array>
+						<key>matcher</key>
+						<string>*</string>
+					</dict>
+				</array>
+				<key>PreToolUse</key>
+				<array>
+					<dict>
+						<key>hooks</key>
+						<array>
+							<dict>
+								<key>args</key>
+								<array>
+									<string>-I</string>
+									<string>/Library/Application Support/AIGovernance/hook_client.py</string>
+									<string>decide</string>
+								</array>
+								<key>command</key>
+								<string>/Library/Application Support/AIGovernance/python/bin/python3</string>
+								<key>onFailure</key>
+								<string>block</string>
+								<key>timeout</key>
+								<integer>15</integer>
+								<key>type</key>
+								<string>command</string>
+							</dict>
+						</array>
+						<key>matcher</key>
+						<string>*</string>
+					</dict>
+				</array>
+				<key>SessionEnd</key>
+				<array>
+					<dict>
+						<key>hooks</key>
+						<array>
+							<dict>
+								<key>args</key>
+								<array>
+									<string>-I</string>
+									<string>/Library/Application Support/AIGovernance/hook_client.py</string>
+									<string>report</string>
+								</array>
+								<key>command</key>
+								<string>/Library/Application Support/AIGovernance/python/bin/python3</string>
+								<key>timeout</key>
+								<integer>2</integer>
+								<key>type</key>
+								<string>command</string>
+							</dict>
+						</array>
+					</dict>
+				</array>
+				<key>SessionStart</key>
+				<array>
+					<dict>
+						<key>hooks</key>
+						<array>
+							<dict>
+								<key>args</key>
+								<array>
+									<string>-I</string>
+									<string>/Library/Application Support/AIGovernance/hook_client.py</string>
+									<string>decide</string>
+								</array>
+								<key>command</key>
+								<string>/Library/Application Support/AIGovernance/python/bin/python3</string>
+								<key>onFailure</key>
+								<string>block</string>
+								<key>timeout</key>
+								<integer>15</integer>
+								<key>type</key>
+								<string>command</string>
+							</dict>
+						</array>
+					</dict>
+				</array>
+				<key>Stop</key>
+				<array>
+					<dict>
+						<key>hooks</key>
+						<array>
+							<dict>
+								<key>args</key>
+								<array>
+									<string>-I</string>
+									<string>/Library/Application Support/AIGovernance/hook_client.py</string>
+									<string>report</string>
+								</array>
+								<key>command</key>
+								<string>/Library/Application Support/AIGovernance/python/bin/python3</string>
+								<key>timeout</key>
+								<integer>5</integer>
+								<key>type</key>
+								<string>command</string>
+							</dict>
+						</array>
+					</dict>
+				</array>
+				<key>SubagentStart</key>
+				<array>
+					<dict>
+						<key>hooks</key>
+						<array>
+							<dict>
+								<key>args</key>
+								<array>
+									<string>-I</string>
+									<string>/Library/Application Support/AIGovernance/hook_client.py</string>
+									<string>report</string>
+								</array>
+								<key>command</key>
+								<string>/Library/Application Support/AIGovernance/python/bin/python3</string>
+								<key>timeout</key>
+								<integer>5</integer>
+								<key>type</key>
+								<string>command</string>
+							</dict>
+						</array>
+					</dict>
+				</array>
+				<key>SubagentStop</key>
+				<array>
+					<dict>
+						<key>hooks</key>
+						<array>
+							<dict>
+								<key>args</key>
+								<array>
+									<string>-I</string>
+									<string>/Library/Application Support/AIGovernance/hook_client.py</string>
+									<string>report</string>
+								</array>
+								<key>command</key>
+								<string>/Library/Application Support/AIGovernance/python/bin/python3</string>
+								<key>timeout</key>
+								<integer>5</integer>
+								<key>type</key>
+								<string>command</string>
+							</dict>
+						</array>
+					</dict>
+				</array>
+				<key>UserPromptSubmit</key>
+				<array>
+					<dict>
+						<key>hooks</key>
+						<array>
+							<dict>
+								<key>args</key>
+								<array>
+									<string>-I</string>
+									<string>/Library/Application Support/AIGovernance/hook_client.py</string>
+									<string>decide</string>
+								</array>
+								<key>command</key>
+								<string>/Library/Application Support/AIGovernance/python/bin/python3</string>
+								<key>onFailure</key>
+								<string>block</string>
+								<key>timeout</key>
+								<integer>15</integer>
+								<key>type</key>
+								<string>command</string>
+							</dict>
+						</array>
+					</dict>
+				</array>
+			</dict>
 			<key>permissions</key>
 			<dict>
 				<key>deny</key>

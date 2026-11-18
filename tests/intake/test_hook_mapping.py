@@ -104,7 +104,7 @@ def test_event_maps_to_kind_and_phase(event_payload: Any, kind: ActionKind, phas
     assert (action.kind, action.phase) == (kind, phase)
 
 
-def test_stop_is_recorded_after_as_other_tool() -> None:
+def test_stop_is_recorded_after_as_turn_end() -> None:
     payload = {
         "session_id": "abc123",
         "cwd": "/Users/...",
@@ -114,9 +114,44 @@ def test_stop_is_recorded_after_as_other_tool() -> None:
         "last_assistant_message": "done",
     }
     action = normalize(envelope(payload)).action
-    assert (action.kind, action.phase) == (ActionKind.OTHER_TOOL, Phase.AFTER)
+    assert (action.kind, action.phase) == (ActionKind.TURN_END, Phase.AFTER)
     assert action.target["event"] == "Stop"
     assert "done" not in action.model_dump_json()
+
+
+def test_subagent_stop_is_recorded_after_as_turn_end_of_that_agent() -> None:
+    payload = {
+        "session_id": "abc123",
+        "cwd": "/Users/x/repo",
+        "hook_event_name": "SubagentStop",
+        "agent_id": "agent-7",
+        "agent_type": "Explore",
+        "stop_hook_active": False,
+        "last_assistant_message": "secret-ish final text",
+    }
+    report = normalize(envelope(payload, event="SubagentStop"))
+    action = report.action
+    assert (action.kind, action.phase) == (ActionKind.TURN_END, Phase.AFTER)
+    assert (action.target["event"], action.target["agent_type"]) == ("SubagentStop", "Explore")
+    assert report.inspection is None
+    assert "secret-ish" not in action.model_dump_json()
+    other = dict(payload, agent_id="agent-8")
+    assert normalize(envelope(other, event="SubagentStop")).action.action_id != action.action_id
+
+
+@pytest.mark.parametrize("tool_name", ["PowerShell", "Bash"])
+def test_shell_tools_map_their_command_like_bash(tool_name: str) -> None:
+    command = "Remove-Item -Recurse -Force C:/temp/x" if tool_name == "PowerShell" else "ls"
+    report = normalize(pre_tool(tool_name, {"command": command, "description": "d"}))
+    assert report.action.kind is ActionKind.SHELL_COMMAND
+    assert report.action.command == command
+    assert report.inspection is not None
+    assert report.inspection.command == command
+
+
+def test_powershell_push_is_classified_as_a_push() -> None:
+    action = normalize(pre_tool("PowerShell", {"command": "git push --force origin main"})).action
+    assert action.kind is ActionKind.GIT_PUSH
 
 
 def test_subagent_start_records_the_agent_type() -> None:

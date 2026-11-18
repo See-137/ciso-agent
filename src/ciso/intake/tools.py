@@ -1,7 +1,7 @@
 """What a tool call is: kind, target, command and content, from its name and input.
 
 Shared by both formats. Tool names and input fields follow the assistant's hook
-documentation (tool_input tables for Bash, Write, Edit, Read, Glob, Grep, WebFetch,
+documentation (tool_input tables for Bash, PowerShell, Write, Edit, Read, Glob, Grep, WebFetch,
 WebSearch, Agent; connector tools named `mcp__<server>__<tool>`). `MultiEdit` and `Task`
 are older names kept for compatibility: `MultiEdit` is read as `file_path` plus `edits`,
 a list of objects each with a `new_string`. A tool not named here is `other_tool`, never
@@ -23,7 +23,11 @@ from ciso.common.protocols import Redactor
 from ciso.intake.errors import RefusalCode, refuse
 from ciso.intake.gitcommand import classify_git
 
-SHELL_TOOLS = frozenset({"Bash", "bash"})
+#: `PowerShell` is the assistant's native PowerShell tool (on by default on Windows); its
+#: hook input carries `command` like `Bash` (tools reference, "PowerShell tool"). The
+#: governance classifier reads commands with a POSIX shell grammar, so PowerShell syntax
+#: it cannot read lands in `unparseable` (ask at most), never in an allow by default.
+SHELL_TOOLS = frozenset({"Bash", "bash", "PowerShell"})
 WRITE_TOOLS = frozenset({"Write"})
 EDIT_TOOLS = frozenset({"Edit", "MultiEdit"})
 READ_TOOLS = frozenset({"Read", "Grep", "Glob"})

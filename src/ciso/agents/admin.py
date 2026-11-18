@@ -22,7 +22,6 @@ from ciso.agents import store
 from ciso.agents import tables as t
 from ciso.agents.gate import Acting, AdminGate, Caller
 from ciso.agents.models import (
-    PERSON_REF_KIND,
     AgentRecord,
     AgentsConflict,
     AgentsNotFound,
@@ -33,7 +32,7 @@ from ciso.agents.models import (
     Registration,
     check_person_ref,
 )
-from ciso.common.activity import AgentClass, IdentityClaim
+from ciso.common.activity import PERSON_REF_KIND, AgentClass, IdentityClaim
 from ciso.common.clock import Clock
 from ciso.common.ids import new_id
 from ciso.common.protocols import AuditSink, PrincipalResolver

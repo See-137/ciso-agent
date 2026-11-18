@@ -16,6 +16,7 @@ from ciso.common.activity import (
     GovernanceDecision,
     Verdict,
 )
+from ciso.common.ids import new_id
 from ciso.intake import (
     MAX_DENY_REASON_CHARS,
     IntakeRefused,
@@ -34,6 +35,7 @@ def decision(
     verdict: Verdict, *, explanation: str = "", action_id: str = "cg_" + "a" * 40
 ) -> GovernanceDecision:
     return GovernanceDecision(
+        decision_id=new_id("dec"),
         action_id=action_id,
         session_id="s1",
         verdict=verdict,

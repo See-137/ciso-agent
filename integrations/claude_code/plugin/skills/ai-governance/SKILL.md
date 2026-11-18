@@ -24,7 +24,10 @@ follow this skill. Following it saves the person you work for time.
 4. Changes to protected branches, production systems, infrastructure, identity and access
    settings go through the company's normal review and approval. Do not try to go around
    a hold.
-5. Do not try to get a refused action through another way: a different tool, a rephrased
+5. Pushes and commits made by you are held for now: the change must pass a pre-push scan
+   that is not yet available. When a push or commit is refused for that reason, tell the
+   person, and suggest they review the change and push it themselves.
+6. Do not try to get a refused action through another way: a different tool, a rephrased
    command, a script that does the same thing, splitting it into steps, or encoding it.
    Every route is checked, and attempts are recorded.
 

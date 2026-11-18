@@ -22,7 +22,7 @@ import unicodedata
 from enum import StrEnum
 from typing import Annotated, Protocol, runtime_checkable
 
-from pydantic import AfterValidator, Field, field_validator, model_validator
+from pydantic import AfterValidator, ConfigDict, Field, field_validator, model_validator
 
 from ciso.common.enums import InformationState
 from ciso.common.schemas import FrozenMap, Model, UtcDatetime
@@ -35,6 +35,13 @@ MAX_FIELD_CHARS = 512
 MAX_ENTRIES = 16
 #: Most findings carried by one inspection result.
 MAX_FINDINGS = 200
+#: Largest content an `InspectionInput` may carry, in characters. Equal to the inspection
+#: lane's `MAX_CONTENT_CHARS`; content above it is refused when the input is built, so an
+#: oversized change can never reach a check that would silently skip it.
+MAX_INSPECTION_CHARS = 1_048_576
+#: Reference kind of a person: `actor:<identity actor id>`. Attribution (`ciso.agents`)
+#: writes it, governance and findings read it; nobody hard-codes the string.
+PERSON_REF_KIND = "actor"
 
 
 def clean_text(value: str) -> str:
@@ -76,6 +83,8 @@ class ActionKind(StrEnum):
     GIT_PUSH = "git_push"
     SESSION_START = "session_start"
     SESSION_END = "session_end"
+    #: The agent finished a turn (the assistant's `Stop` event). Reported after the fact.
+    TURN_END = "turn_end"
     OTHER_TOOL = "other_tool"
 
 
@@ -188,21 +197,30 @@ class Severity(StrEnum):
 
 
 class InspectionFinding(Model):
-    """One problem a check found. `detail` names the problem, never the secret or the text."""
+    """One problem a check found. `detail` names the problem, never the secret or the text.
+
+    `remediation` is the check's fixed advice (from the check's own table, never composed
+    from the content); empty when the check has none.
+    """
 
     check_id: Annotated[str, Field(pattern=r"^[a-z][a-z0-9_.-]{0,63}$")]
     category: Annotated[str, Field(pattern=r"^[a-z][a-z0-9_]{0,31}$")]
     severity: Severity
     detail: Text
     location: Text = ""
+    remediation: Text = ""
 
 
 class InspectionInput(Model):
     """Content to inspect. Held in memory only; never stored by the contract's users.
 
     Fields stay out of `repr` so content cannot reach a log through an exception or a
-    debug print.
+    debug print. `content` is bounded by `MAX_INSPECTION_CHARS` (a structural bound):
+    longer content is refused here, and the caller treats the action as not inspected.
     """
+
+    #: A validation error must not quote the content it refused.
+    model_config = ConfigDict(hide_input_in_errors=True)
 
     action_id: Text
     kind: ActionKind
@@ -210,7 +228,9 @@ class InspectionInput(Model):
     command: Annotated[str, Field(max_length=MAX_COMMAND_CHARS)] | None = Field(
         default=None, repr=False
     )
-    content: str | None = Field(default=None, repr=False)
+    content: Annotated[str, Field(max_length=MAX_INSPECTION_CHARS)] | None = Field(
+        default=None, repr=False
+    )
 
 
 class InspectionResult(Model):
@@ -241,10 +261,16 @@ class DecisionReason(Model):
     detail: Text
 
 
+#: A decision id: `dec_` plus the platform id body (`ciso.common.ids.new_id("dec")`).
+DECISION_ID_PATTERN = r"^dec_[0-9A-HJKMNP-TV-Z]{26}$"
+
+
 class GovernanceDecision(Model):
     """The answer for one observed action. A source that can stop the action applies it;
-    `explanation` is safe to show the person whose agent was stopped."""
+    `explanation` is safe to show the person whose agent was stopped. `decision_id` is
+    set by the governance engine (`new_id("dec")`) and is what the engineer quotes."""
 
+    decision_id: Annotated[str, Field(pattern=DECISION_ID_PATTERN)]
     action_id: Text
     session_id: Text
     verdict: Verdict

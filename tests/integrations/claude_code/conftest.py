@@ -157,6 +157,7 @@ def run(hc: ModuleType, environ: dict[str, str], transport: FakeTransport) -> Ru
         payload: Any,
         env: dict[str, str] | None = None,
         raw: bytes | None = None,
+        isolated: bool = True,
     ) -> tuple[int, str, str]:
         data = raw if raw is not None else json.dumps(payload).encode("utf-8")
         stdin = io.BytesIO(data)
@@ -171,6 +172,7 @@ def run(hc: ModuleType, environ: dict[str, str], transport: FakeTransport) -> Ru
             transport=transport,
             hostname=lambda: "WS-0142",
             is_windows=True,
+            isolated=isolated,
         )
         return code, stdout.getvalue(), stderr.getvalue()
 

@@ -52,7 +52,8 @@
       "Edit(~/.claude/settings.json)",
       "Edit(~/.claude/plugins/**)",
       "Read(//etc/ai-governance/**)",
-      "Edit(//etc/ai-governance/**)"
+      "Edit(//etc/ai-governance/**)",
+      "Edit(//usr/local/lib/ai-governance/**)"
     ]
   },
   "env": {
@@ -65,5 +66,140 @@
   },
   "companyAnnouncements": [
     "AI activity in Claude Code on this machine is checked and recorded by the company AI-governance service. Refused actions show a decision id; quote it when you contact the security team."
-  ]
+  ],
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/bin/python3",
+            "args": [
+              "-I",
+              "/usr/local/lib/ai-governance/hook_client.py",
+              "decide"
+            ],
+            "timeout": 15,
+            "onFailure": "block"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/bin/python3",
+            "args": [
+              "-I",
+              "/usr/local/lib/ai-governance/hook_client.py",
+              "decide"
+            ],
+            "timeout": 15,
+            "onFailure": "block"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/bin/python3",
+            "args": [
+              "-I",
+              "/usr/local/lib/ai-governance/hook_client.py",
+              "decide"
+            ],
+            "timeout": 15,
+            "onFailure": "block"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/bin/python3",
+            "args": [
+              "-I",
+              "/usr/local/lib/ai-governance/hook_client.py",
+              "report"
+            ],
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/bin/python3",
+            "args": [
+              "-I",
+              "/usr/local/lib/ai-governance/hook_client.py",
+              "report"
+            ],
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/bin/python3",
+            "args": [
+              "-I",
+              "/usr/local/lib/ai-governance/hook_client.py",
+              "report"
+            ],
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/bin/python3",
+            "args": [
+              "-I",
+              "/usr/local/lib/ai-governance/hook_client.py",
+              "report"
+            ],
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/bin/python3",
+            "args": [
+              "-I",
+              "/usr/local/lib/ai-governance/hook_client.py",
+              "report"
+            ],
+            "timeout": 2
+          }
+        ]
+      }
+    ]
+  }
 }

@@ -2,7 +2,8 @@
 
 A rule has a fixed id, a category, a severity and a fixed remediation text. The findings
 lane may not import this package (it sees only `ciso.common`), so the remediation travels
-inside each finding's `detail` (see `Rule.detail`).
+on each finding's own `remediation` field (and, for people reading the raw finding, in
+`detail`, see `Rule.detail`).
 
 Severity mapping, applied the same way by every table in this package:
 

@@ -10,7 +10,8 @@ Error bodies are short and fixed per status; exception text never reaches a clie
 refusal that carries a stable reason code (an approval or external-inference refusal)
 also gets that code in a `reason` field: the enum value, never the message. An unexpected
 exception is logged through the redacting handler and answered 500 with a correlation id
-only. Every authenticated request is audited (`api.request`) when it ends.
+only. Every authenticated request is audited (`api.request`) when it ends. Every request
+body is capped (`ciso.api.bodylimit`): 413 past the route's limit.
 """
 
 from __future__ import annotations
@@ -26,7 +27,9 @@ import anyio
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from pydantic import ValidationError
 
+from ciso.api.bodylimit import MAX_BODY_BYTES, MAX_GATE_BODY_BYTES, BodyLimitMiddleware
 from ciso.api.deps import (
     STATE_PRINCIPAL,
     STATE_ROUTE,
@@ -35,8 +38,12 @@ from ciso.api.deps import (
     undeclared_routes,
 )
 from ciso.api.ratelimit import RateLimiter
+from ciso.api.routers.agents import register_agent_routes
 from ciso.api.routers.approvals import register_approval_routes
+from ciso.api.routers.devices import register_device_routes
 from ciso.api.routers.external_inference import register_external_inference_routes
+from ciso.api.routers.findings import register_findings_routes
+from ciso.api.routers.governance import register_governance_routes
 from ciso.api.routers.system import register_system_routes
 from ciso.app.container import Container
 from ciso.common.enums import AuditOutcome
@@ -146,6 +153,15 @@ async def _invalid_request(request: Request, exc: Exception) -> JSONResponse:
     )
 
 
+async def _invalid_model(request: Request, exc: Exception) -> JSONResponse:
+    """A record a service built from request data did not validate. Fixed body: the
+    validation message can quote the input."""
+    assert isinstance(exc, ValidationError)
+    return JSONResponse(
+        {"error": "invalid_request", "message": "the request is not valid"}, status_code=422
+    )
+
+
 class RequestMiddleware:
     """Correlation id, last-resort 500, and the closing `api.request` audit record."""
 
@@ -245,9 +261,20 @@ def create_app(container: Container) -> FastAPI:
     register_system_routes(app, container)
     register_approval_routes(app, container)
     register_external_inference_routes(app, container)
+    register_governance_routes(app, container)
+    register_device_routes(app, container)
+    register_agent_routes(app, container)
+    register_findings_routes(app, container)
     app.add_exception_handler(ApiError, _api_error)
     app.add_exception_handler(CisoError, _ciso_error)
     app.add_exception_handler(RequestValidationError, _invalid_request)
+    app.add_exception_handler(ValidationError, _invalid_model)
+    # Added first, so it sits inside the request middleware (see ciso.api.bodylimit).
+    app.add_middleware(
+        BodyLimitMiddleware,
+        default_limit=MAX_BODY_BYTES,
+        limits={"/v1/central-gate": MAX_GATE_BODY_BYTES},
+    )
     app.add_middleware(RequestMiddleware, container=container)
     undeclared = undeclared_routes(app)
     if undeclared:

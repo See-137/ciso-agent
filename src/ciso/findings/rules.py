@@ -73,6 +73,9 @@ class Draft:
     title: str
     location: str
     recommendation_key: str
+    #: The check's own fixed remediation (`InspectionFinding.remediation`); empty for a
+    #: decision finding or a check without one. Wins over the catalog when present.
+    remediation: str = ""
 
 
 def check_consistent(
@@ -98,6 +101,7 @@ def _inspection_draft(item: InspectionFinding, path: str) -> Draft:
         title=f"{item.category}: {item.check_id}",
         location=item.location or path,
         recommendation_key=item.check_id,
+        remediation=item.remediation,
     )
 
 

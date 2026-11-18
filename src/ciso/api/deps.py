@@ -20,6 +20,19 @@ Order of checks inside `require`, chosen so the cheap refusals come first:
 6. a state-changing method: refused with 503 while writes are blocked (gated routes,
    see `require`); otherwise the attempt is audited before the handler runs, and an audit
    failure is 503 (blueprint 9.5, `ciso.audit.log` ordering rule).
+
+Two more declarations exist besides `require`:
+
+- `require_device()` declares `governance.report`, the permission of the decide and
+  activity routes. No role template grants it (`DEVICE_ONLY_PERMISSIONS`; `granted`
+  strips it from any role): it is held only by an authenticated actor of type `service`
+  with no roles that the device directory lists as an active device (`ciso.app.devices`).
+  Same order as `require`, so each device has its own rate budget (`actor:<id>`). The
+  write gate does not apply: the governance engine applies the kill switch itself, so
+  reads stay possible while it is engaged.
+- `require_signed_webhook()` declares `SIGNED_WEBHOOK`: no bearer token; the handler
+  authenticates the delivery by its webhook signature (`ciso.app.governance_gate`). The
+  dependency applies the rate limit per client address only.
 """
 
 from __future__ import annotations
@@ -34,7 +47,7 @@ from fastapi.routing import APIRoute
 
 from ciso.api.ratelimit import RateLimiter
 from ciso.app.container import Container
-from ciso.common.enums import AuditOutcome, KillCapability
+from ciso.common.enums import ActorType, AuditOutcome, KillCapability
 from ciso.common.errors import AuthenticationError
 from ciso.common.principal import Principal
 from ciso.common.protocols import AuditEvent
@@ -56,6 +69,12 @@ _SCOPE_ATTR: Final = "ciso_route_scope"
 PLATFORM: Final = "platform"
 RESOURCE: Final = "resource"
 UNAUTHENTICATED_BODY: Final = {"error": "unauthenticated", "message": "authentication required"}
+#: The permission of the decide and activity routes; see `require_device`.
+DEVICE_PERMISSION: Final = "governance.report"
+#: Permissions that no role confers, whatever a template says (defence in depth).
+DEVICE_ONLY_PERMISSIONS: Final = frozenset({DEVICE_PERMISSION})
+#: Pseudo-permission of a route whose handler authenticates a signed webhook delivery.
+SIGNED_WEBHOOK: Final = "signed_webhook"
 
 
 class ApiError(Exception):
@@ -175,7 +194,8 @@ def granted(principal: Principal, attributes: Mapping[str, str | None]) -> froze
     unscoped grant count: `Principal.covers(role, {})` is false for a narrowed grant,
     because a narrowed attribute that is not supplied never matches.
     """
-    return permissions_for(principal.covering_roles(principal.roles, attributes))
+    roles = principal.covering_roles(principal.roles, attributes)
+    return permissions_for(roles) - DEVICE_ONLY_PERMISSIONS
 
 
 def require(
@@ -202,6 +222,8 @@ def require(
     """
     if permission != AUTHENTICATED and permission not in PERMISSIONS:
         raise ValueError(f"unknown permission: {permission!r}")
+    if permission in DEVICE_ONLY_PERMISSIONS:
+        raise ValueError(f"{permission!r} is declared through require_device()")
 
     def dependency(request: Request) -> Principal:
         limiter = limiter_of(request)
@@ -231,6 +253,70 @@ def require(
     setattr(dependency, _PERMISSION_ATTR, permission)
     setattr(dependency, _SCOPE_ATTR, PLATFORM if target is None else RESOURCE)
     dependency.__name__ = f"require_{permission.replace('.', '_')}"
+    return dependency
+
+
+def _configured(limiter: RateLimiter) -> None:
+    if not limiter.configured:
+        raise ApiError(
+            503,
+            "rate_limit_not_configured",
+            "api_rate_limit_per_minute is not set; the API refuses requests",
+        )
+
+
+def _is_device(request: Request, principal: Principal) -> bool:
+    """A service actor with no roles that the device directory lists now. A directory that
+    cannot be read refuses the request (503)."""
+    if principal.actor_type is not ActorType.SERVICE or principal.roles:
+        return False
+    try:
+        return container_of(request).governance.devices.is_device(principal.actor_id)
+    except Exception as exc:
+        logger.error("api: device directory unreadable (%s); refused", type(exc).__name__)
+        raise ApiError(503, "unavailable", "a required control is unavailable") from exc
+
+
+def require_device() -> Callable[[Request], Principal]:
+    """The dependency of the decide and activity routes. See the module docstring."""
+
+    def dependency(request: Request) -> Principal:
+        limiter = limiter_of(request)
+        _configured(limiter)
+        principal = _authenticate(request, limiter)
+        route_obj = request.scope.get("route")
+        route = str(getattr(route_obj, "path", request.url.path))
+        setattr(request.state, STATE_PRINCIPAL, principal)
+        setattr(request.state, STATE_ROUTE, route)
+        decision = limiter.hit(f"actor:{principal.actor_id}")
+        if not decision.allowed:
+            raise _too_many(decision.retry_after_seconds)
+        if not _is_device(request, principal):
+            raise ApiError(403, "forbidden", "not permitted")
+        if request.method.upper() in STATE_CHANGING:
+            _audit_attempt(request, principal, route)
+        return principal
+
+    setattr(dependency, _PERMISSION_ATTR, DEVICE_PERMISSION)
+    setattr(dependency, _SCOPE_ATTR, PLATFORM)
+    dependency.__name__ = "require_device"
+    return dependency
+
+
+def require_signed_webhook() -> Callable[[Request], None]:
+    """No bearer token: rate-limited per client address; the handler checks the signature."""
+
+    def dependency(request: Request) -> None:
+        limiter = limiter_of(request)
+        _configured(limiter)
+        address = f"addr:{request.client.host if request.client else 'unknown'}"
+        decision = limiter.hit(address)
+        if not decision.allowed:
+            raise _too_many(decision.retry_after_seconds)
+
+    setattr(dependency, _PERMISSION_ATTR, SIGNED_WEBHOOK)
+    setattr(dependency, _SCOPE_ATTR, PLATFORM)
+    dependency.__name__ = "require_signed_webhook"
     return dependency
 
 
