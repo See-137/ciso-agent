@@ -1,0 +1,42 @@
+{
+  "description": "CISO agent: every tool call and every prompt is decided locally, before it runs, by the bundled governance engine and ruleset. Exec form (no shell). onFailure block: a crash, a missing runtime or a timeout blocks the action.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uv",
+            "args": [
+              "run", "--quiet", "--no-config", "--no-project", "--python", ">=3.13",
+              "--directory", "${CLAUDE_PLUGIN_ROOT}",
+              "--with-requirements", "${CLAUDE_PLUGIN_ROOT}/scripts/ciso_hook.py",
+              "--", "python", "-I", "-B", "${CLAUDE_PLUGIN_ROOT}/scripts/ciso_hook.py"
+            ],
+            "timeout": 60,
+            "onFailure": "block"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uv",
+            "args": [
+              "run", "--quiet", "--no-config", "--no-project", "--python", ">=3.13",
+              "--directory", "${CLAUDE_PLUGIN_ROOT}",
+              "--with-requirements", "${CLAUDE_PLUGIN_ROOT}/scripts/ciso_hook.py",
+              "--", "python", "-I", "-B", "${CLAUDE_PLUGIN_ROOT}/scripts/ciso_hook.py"
+            ],
+            "timeout": 60,
+            "onFailure": "block"
+          }
+        ]
+      }
+    ]
+  }
+}

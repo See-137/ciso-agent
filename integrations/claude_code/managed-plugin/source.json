@@ -1,0 +1,82 @@
+{
+  "_comment": [
+    "Source of the managed settings for the CISO agent plugin (no servers). Edit this file, then run: uv run python tools/build_ciso_plugin.py, then: python integrations/claude_code/managed-plugin/check_managed.py integrations/claude_code/managed-plugin",
+    "Every value containing REPLACE_ME is a placeholder; the checker reports NOT READY while any remains.",
+    "common: keys every platform gets. platforms.<name>: admin-owned paths. git_hardening: config pairs delivered through GIT_CONFIG_COUNT / GIT_CONFIG_KEY_n / GIT_CONFIG_VALUE_n, plus core.hooksPath set to the platform's empty_hooks_dir."
+  ],
+  "common": {
+    "forceLoginMethod": "claudeai",
+    "forceLoginOrgUUID": "REPLACE_ME_ORG_UUID",
+    "requiredMinimumVersion": "2.1.316",
+    "allowManagedHooksOnly": true,
+    "disableCommandPluginSources": true,
+    "disableSideloadFlags": true,
+    "strictKnownMarketplaces": [
+      {
+        "source": "git",
+        "url": "https://REPLACE_ME_MARKETPLACE_GIT_URL"
+      }
+    ],
+    "extraKnownMarketplaces": {
+      "corp-ai-governance": {
+        "source": {
+          "source": "git",
+          "url": "https://REPLACE_ME_MARKETPLACE_GIT_URL"
+        },
+        "autoUpdate": true
+      }
+    },
+    "enabledPlugins": {
+      "ciso-agent@corp-ai-governance": true
+    },
+    "permissions": {
+      "disableBypassPermissionsMode": "disable",
+      "deny": [
+        "Edit(~/.claude/plugins/**)",
+        "Write(~/.claude/plugins/**)",
+        "Edit(~/.claude/settings.json)",
+        "Write(~/.claude/settings.json)",
+        "Edit(//**/.claude/settings*.json)",
+        "Write(//**/.claude/settings*.json)",
+        "Edit(//**/.mcp.json)",
+        "Write(//**/.mcp.json)",
+        "Read(~/.ssh/**)",
+        "Read(~/.aws/credentials)",
+        "Read(~/.git-credentials)",
+        "Read(//**/.env)",
+        "Read(//**/.env.*)"
+      ]
+    },
+    "env": {
+      "CISO_STOP": "0",
+      "CISO_ROLE": "employee",
+      "CISO_AGENT_CLASS": "employee_operated",
+      "UV_NO_CONFIG": "1"
+    }
+  },
+  "git_hardening": [
+    ["safe.bareRepository", "explicit"],
+    ["push.recurseSubmodules", "no"],
+    ["protocol.ext.allow", "never"]
+  ],
+  "platforms": {
+    "windows": {
+      "empty_hooks_dir": "C:/Program Files/CISOAgent/empty-hooks",
+      "env": {
+        "CISO_GIT_PATH": "C:/Program Files/Git/cmd/git.exe"
+      }
+    },
+    "macos": {
+      "empty_hooks_dir": "/Library/Application Support/CISOAgent/empty-hooks",
+      "env": {
+        "CISO_GIT_PATH": "/usr/bin/git"
+      }
+    },
+    "linux": {
+      "empty_hooks_dir": "/usr/local/share/ciso-agent/empty-hooks",
+      "env": {
+        "CISO_GIT_PATH": "/usr/bin/git"
+      }
+    }
+  }
+}

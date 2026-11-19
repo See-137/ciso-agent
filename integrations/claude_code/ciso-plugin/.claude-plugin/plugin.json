@@ -1,0 +1,11 @@
+{
+  "name": "ciso-agent",
+  "displayName": "CISO agent",
+  "version": "0.1.0",
+  "description": "A CISO agent for the organization: local hooks that decide every agent action and prompt before it runs with fixed, tested rules (secrets, sensitive paths, agent settings, force pushes, scanned pushes, an organization stop flag), and a CISO skill that reviews code, explains verdicts, audits agent setups and summarises findings. No servers.",
+  "author": {
+    "name": "Company security team"
+  },
+  "license": "UNLICENSED",
+  "keywords": ["security", "governance", "ciso", "audit"]
+}

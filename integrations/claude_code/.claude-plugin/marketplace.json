@@ -6,9 +6,14 @@
   },
   "plugins": [
     {
+      "name": "ciso-agent",
+      "source": "./ciso-plugin",
+      "description": "CISO agent: local enforcing hooks (no servers) and the CISO skill"
+    },
+    {
       "name": "ai-governance",
       "source": "./plugin",
-      "description": "Company AI governance hooks and advisory skill"
+      "description": "Optional add-on: advisory skill for the AI-governance service (the service's hooks live in its own managed policy pack)"
     }
   ]
 }

@@ -1,0 +1,60 @@
+{
+  "forceLoginMethod": "claudeai",
+  "forceLoginOrgUUID": "REPLACE_ME_ORG_UUID",
+  "requiredMinimumVersion": "2.1.316",
+  "allowManagedHooksOnly": true,
+  "disableCommandPluginSources": true,
+  "disableSideloadFlags": true,
+  "strictKnownMarketplaces": [
+    {
+      "source": "git",
+      "url": "https://REPLACE_ME_MARKETPLACE_GIT_URL"
+    }
+  ],
+  "extraKnownMarketplaces": {
+    "corp-ai-governance": {
+      "source": {
+        "source": "git",
+        "url": "https://REPLACE_ME_MARKETPLACE_GIT_URL"
+      },
+      "autoUpdate": true
+    }
+  },
+  "enabledPlugins": {
+    "ciso-agent@corp-ai-governance": true
+  },
+  "permissions": {
+    "disableBypassPermissionsMode": "disable",
+    "deny": [
+      "Edit(~/.claude/plugins/**)",
+      "Write(~/.claude/plugins/**)",
+      "Edit(~/.claude/settings.json)",
+      "Write(~/.claude/settings.json)",
+      "Edit(//**/.claude/settings*.json)",
+      "Write(//**/.claude/settings*.json)",
+      "Edit(//**/.mcp.json)",
+      "Write(//**/.mcp.json)",
+      "Read(~/.ssh/**)",
+      "Read(~/.aws/credentials)",
+      "Read(~/.git-credentials)",
+      "Read(//**/.env)",
+      "Read(//**/.env.*)"
+    ]
+  },
+  "env": {
+    "CISO_AGENT_CLASS": "employee_operated",
+    "CISO_GIT_PATH": "C:/Program Files/Git/cmd/git.exe",
+    "CISO_ROLE": "employee",
+    "CISO_STOP": "0",
+    "GIT_CONFIG_COUNT": "4",
+    "GIT_CONFIG_KEY_0": "safe.bareRepository",
+    "GIT_CONFIG_KEY_1": "push.recurseSubmodules",
+    "GIT_CONFIG_KEY_2": "protocol.ext.allow",
+    "GIT_CONFIG_KEY_3": "core.hooksPath",
+    "GIT_CONFIG_VALUE_0": "explicit",
+    "GIT_CONFIG_VALUE_1": "no",
+    "GIT_CONFIG_VALUE_2": "never",
+    "GIT_CONFIG_VALUE_3": "C:/Program Files/CISOAgent/empty-hooks",
+    "UV_NO_CONFIG": "1"
+  }
+}

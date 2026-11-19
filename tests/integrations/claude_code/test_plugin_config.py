@@ -44,7 +44,12 @@ def test_marketplace_lists_the_plugin() -> None:
     market = json.loads((INTEGRATION / ".claude-plugin" / "marketplace.json").read_text("utf-8"))
     assert market["name"] == "corp-ai-governance"
     assert market["owner"]["name"]
-    assert [(p["name"], p["source"]) for p in market["plugins"]] == [("ai-governance", "./plugin")]
+    # The CISO agent plugin (the deliverable) and the advisory plugin the optional service
+    # add-on's managed pack force-enables.
+    assert [(p["name"], p["source"]) for p in market["plugins"]] == [
+        ("ciso-agent", "./ciso-plugin"),
+        ("ai-governance", "./plugin"),
+    ]
 
 
 def test_the_plugin_declares_no_hooks(hooks_config: dict[str, Any], checker: ModuleType) -> None:
