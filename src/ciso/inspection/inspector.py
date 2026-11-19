@@ -34,6 +34,7 @@ from ciso.inspection.rules import (
 )
 from ciso.inspection.sandbox import from_sandbox_report
 from ciso.inspection.secret_scan import scan_secrets
+from ciso.inspection.shell_targets import write_targets
 
 #: Largest text (content, command or diff) inspected, in characters. The shared contract
 #: refuses an `InspectionInput` whose content is longer, so through `Inspector.inspect`
@@ -127,7 +128,9 @@ class Inspector:
       line of the new content counts as added);
     - commit or push: the content is a diff, inspected with `inspect_diff`;
     - prompt: secrets in the text;
-    - shell command, or any other kind that carries text: secrets and risky code.
+    - shell command, or any other kind that carries text: the files it writes (redirects,
+      `tee`, copy and move destinations, content cmdlets; `ciso.inspection.shell_targets`)
+      against the sensitive paths, then secrets and risky code.
 
     `required_sandbox_checks` is the set of sandbox check ids every change must pass; it
     has no default, and while it is unset no sandbox result is ever complete.
@@ -163,6 +166,9 @@ class Inspector:
             code = item.kind is not ActionKind.PROMPT
             _inspect_text(item.content, item.path, out, code=code)
         if item.command is not None:
+            out.ran(CHECK_PATHS)
+            for target in write_targets(item.command):
+                check_path(target, out)
             _inspect_text(item.command, COMMAND_LABEL, out, code=True)
         return out.result(item.action_id)
 

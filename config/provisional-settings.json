@@ -42,9 +42,15 @@
   },
   "governance": {
     "ruleset_path": "config/governance-ruleset.provisional.json",
-    "required_sandbox_checks": null,
+    "required_sandbox_checks": ["secrets", "code", "tests"],
     "central_gate_secret_ref": "secret://central_gate_signing_secret",
     "central_gate_tolerance_seconds": 300,
-    "central_gate_replay_capacity": 10000
+    "central_gate_replay_capacity": 10000,
+    "change_key_ref": "secret://change_store_key",
+    "change_retention_seconds": 3600,
+    "sandbox_url": "http://127.0.0.1:8790",
+    "sandbox_token_ref": "secret://sandbox_token",
+    "sandbox_timeout_seconds": 120,
+    "worker_poll_seconds": 2
   }
 }

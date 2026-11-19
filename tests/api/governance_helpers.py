@@ -21,7 +21,14 @@ OS_ACCOUNT = "CORP\\jdoe"
 SESSION = "sess-e2e-1"
 CWD = "C:\\work\\repo"
 GATE_SECRET = "whsec_" + base64.b64encode(b"g" * 32).decode()
-GOV_ENV = {**SECRET_ENV, "CISO_SECRET_CENTRAL_GATE_SIGNING_SECRET": GATE_SECRET}
+CHANGE_KEY = "change-store-key-for-api-tests-6c0d2f19ab"
+SANDBOX_TOKEN = "sandbox-token-for-api-tests-77e1"
+GOV_ENV = {
+    **SECRET_ENV,
+    "CISO_SECRET_CENTRAL_GATE_SIGNING_SECRET": GATE_SECRET,
+    "CISO_SECRET_CHANGE_STORE_KEY": CHANGE_KEY,
+    "CISO_SECRET_SANDBOX_TOKEN": SANDBOX_TOKEN,
+}
 
 
 @dataclass

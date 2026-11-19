@@ -1,21 +1,28 @@
 """`assistant_hook_v1`: a hook report posted to the decision API (docs/skill/decision-api.md).
 
-The envelope is a closed schema: `format`, `event`, `surface`, `claims`, `payload`, and
-an optional `device` (missing or null: no device), at most `MAX_REQUEST_BYTES` of JSON.
+The envelope is a closed schema: `format`, `event`, `surface`, `claims`, `payload`, an
+optional `device` (missing or null: no device) and an optional `report_id` (a client
+nonce, made once per hook invocation and reused on its retry), at most
+`MAX_REQUEST_BYTES` of JSON.
 The payload is the hook's own input, passed through unchanged by the client; its known
 fields are checked and its other fields are ignored, because the assistant adds fields
 between releases. The device name also becomes the `device` target attribute.
 
 Who reported it: the device actor the API layer authenticated from the bearer token is
 the one verified claim. Every claim the client sends stays unverified, and a client that
-marks one verified is refused.
+marks one verified is refused, as is a client claim of a kind the service itself vouches
+for (`RESERVED_CLAIM_KINDS`: the device actor, the device name it adds itself, and the
+assistant account only the signed central gate reports).
 
 The action id is derived from the session id, the event and the tool_use_id (tool
 events), prompt_id (prompt and stop events), agent_id (subagent start) or the session
 start source, so a retried report is the same action. `Stop` (the agent ended its
 turn) and `SubagentStop` (a sub-agent did) map to `turn_end`; their final message text is
-never read. Two SessionStart reports for the
-same session and the same source (two resumes) get the same id; that is a known limit.
+never read. A SessionStart payload carries nothing unique per report, so two resumes of
+one session would collide (queue Q2): its id also takes the envelope's `report_id`
+(a retry of the SAME report reuses it, so the retry stays the same action); a client
+that sends none gets the receive time instead, which separates two starts but makes a
+retried start a second record.
 """
 
 from __future__ import annotations
@@ -47,7 +54,11 @@ MAX_REQUEST_BYTES = 256 * 1024
 MAX_REQUEST_DEPTH = 32
 
 REQUIRED_KEYS = frozenset({"format", "event", "surface", "claims", "payload"})
-ENVELOPE_KEYS = REQUIRED_KEYS | {"device"}
+ENVELOPE_KEYS = REQUIRED_KEYS | {"device", "report_id"}
+#: Claim kinds only the service sets: a client sending one is refused (review M5).
+RESERVED_CLAIM_KINDS = frozenset(
+    {"device_actor", "device_name", "assistant_account", "assistant_email"}
+)
 #: Target attribute naming the reporting machine. Must equal the agents registry's
 #: `DEVICE_TARGET_KEY`, which matches sessions and agents on it (a test pins the two).
 DEVICE_TARGET_KEY = "device"
@@ -115,6 +126,8 @@ def _claims(raw: Any, device: str | None, device_actor_id: str) -> tuple[Identit
             raise refuse(RefusalCode.CLAIM_MARKED_VERIFIED)
         if item["verified"] is not False or not isinstance(item["kind"], str):
             raise refuse(RefusalCode.INVALID_FIELD)
+        if item["kind"] in RESERVED_CLAIM_KINDS:
+            raise refuse(RefusalCode.CLAIM_KIND_RESERVED)
         claims.append(make_claim(item["kind"], _clean(item["subject"]), verified=False))
     if device is not None:
         claims.append(make_claim("device_name", device, verified=False))
@@ -138,7 +151,11 @@ def _required_id(payload: Mapping[str, Any], key: str) -> str:
 
 
 def _event_view(
-    event: str, payload: Mapping[str, Any], cwd: str | None, redactor: Redactor
+    event: str,
+    payload: Mapping[str, Any],
+    cwd: str | None,
+    redactor: Redactor,
+    report: str,
 ) -> tuple[str, str, ToolView]:
     """(correlation id, tool name, view) for one event."""
     if event in TOOL_EVENTS:
@@ -167,7 +184,7 @@ def _event_view(
     if event == "SessionStart":
         source = payload.get("source", "unknown")
         return (
-            "start:" + _matching(source, _SESSION_SOURCE),
+            "start:" + _matching(source, _SESSION_SOURCE) + ":" + report,
             "",
             ToolView(ActionKind.SESSION_START, {}),
         )
@@ -206,7 +223,11 @@ def normalize_hook_report(
     raw_device = envelope.get("device")
     device = None if raw_device is None else _matching(raw_device, _DEVICE)
     claims = _claims(envelope["claims"], device, _clean_actor(device_actor_id))
-    correlation, tool_name, view = _event_view(event, payload, cwd, redactor)
+    if "report_id" in envelope:
+        report = "id:" + _matching(envelope["report_id"], _IDENT)
+    else:
+        report = "at:" + received_at.isoformat()
+    correlation, tool_name, view = _event_view(event, payload, cwd, redactor, report)
     origin = Origin(session_id, ActivitySource.HOOK, EVENTS[event], surface, received_at, claims)
     action, inspection = build_action(
         action_id=derive_action_id("hk", FORMAT, session_id, event, correlation),

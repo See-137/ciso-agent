@@ -7,9 +7,18 @@ Order for one hook report, from a device the API layer already authenticated:
    `ObservedAction` plus the content to inspect, held in memory only;
 2. attribute (`AgentRegistry.attribute`): person and agent behind the session;
 3. inspect, when `requires_inspection(action)` (`Inspector.inspect` on the normalized
-   input). A push or commit carries no change content in this build (the sandbox lane
-   uploads it later), so its inspection is incomplete and the ruleset's
-   `missing_inspection: deny` refuses it; the engineer is told so (`PUSH_HELD_NOTE`);
+   input). A push or commit is inspected through its uploaded change
+   (docs/skill/decision-api.md, "Pre-push change upload"):
+   - asked WITHOUT a change, its inspection is incomplete and the ruleset's
+     `missing_inspection: deny` refuses it. When that is the only reason and the command
+     is one plain git push or commit (`ciso.app.change_shape`), the deny carries
+     `needs_change` and the client uploads the change and asks again; otherwise the
+     engineer is told to use the plain form (`PLAIN_COMMAND_NOTE`);
+   - asked WITH `change_id` and `change_head`: the change must belong to this device and
+     session, be unexpired and match the command and head (`ChangeService.resolve`), or
+     the answer is `change_refused`. While the sandbox report is not back the answer is
+     `checks_pending`. Then the command's, the diff's and the sandbox's results are merged
+     into one inspection and the rules decide (a commit has no sandbox run);
 4. decide (`GovernanceEngine.decide`, which audits the decision itself);
 5. record findings (`FindingsService.record`): for decide, every decision; for activity,
    denials only.
@@ -26,9 +35,20 @@ import logging
 from enum import StrEnum
 from typing import Any, Final
 
+from ciso.app.change_decide import (
+    ChangeRef,
+    NeedsChange,
+    merge_inspections,
+    sandbox_failed,
+    split_change_ref,
+)
+from ciso.app.change_models import ChangeRefused, ChangeState
+from ciso.app.change_shape import change_shape
+from ciso.app.changes import ChangeService
 from ciso.common.activity import (
     ActionKind,
     GovernanceDecision,
+    InspectionInput,
     InspectionResult,
     ObservedAction,
     Phase,
@@ -58,12 +78,23 @@ logger = logging.getLogger(__name__)
 REFUSE_ACTION: Final = "governance.pipeline.refuse"
 ACTIVITY_ACTION: Final = "governance.activity"
 
-#: Added to the message of a refused push or commit whose change content was not there to
-#: inspect. Fixed text; nothing from the action is echoed.
-PUSH_HELD_NOTE: Final = (
-    " Pushes and commits by AI agents are held until the pre-push scan of the change is "
-    "available on this service; push this change yourself after review, or ask the "
-    "security team."
+#: Added to the message of a refused push or commit whose change can be scanned: the
+#: AI-governance client uploads it and asks again. Fixed text; nothing is echoed.
+CHANGE_SCAN_NOTE: Final = (
+    " The change must be scanned first: an up-to-date AI-governance client sends it for "
+    "scanning and asks again automatically."
+)
+#: Added when the push or commit is not one plain git command, so its change cannot be
+#: scanned before it runs.
+PLAIN_COMMAND_NOTE: Final = (
+    " Pushes and commits by AI agents are scanned before they run, and only a single plain "
+    "command that names one branch can be scanned: push one branch at a time and name it, "
+    "as in git push <remote> <branch> (no bare git push, no --all, --tags, --mirror, "
+    "deletes or refspec lists), or commit with git commit -m <message>, each on its own."
+)
+#: Reason codes that mean only the inspection was missing.
+_INSPECTION_CODES: Final = frozenset(
+    {ReasonCode.INSPECTION_INCOMPLETE.value, ReasonCode.INSPECTION_MISSING.value}
 )
 _HELD_KINDS: Final = frozenset({ActionKind.GIT_PUSH, ActionKind.GIT_COMMIT})
 _CHANGE_CLASSES: Final = frozenset(
@@ -91,6 +122,8 @@ class PipelineReason(StrEnum):
     ATTRIBUTION_UNAVAILABLE = "attribution_unavailable"
     INSPECTION_FAILED = "inspection_failed"
     FINDINGS_UNAVAILABLE = "findings_unavailable"
+    CHECKS_PENDING = "checks_pending"
+    CHANGE_REFUSED = "change_refused"
     INTERNAL_ERROR = "internal_error"
 
 
@@ -112,6 +145,15 @@ PIPELINE_MESSAGES: Final[dict[PipelineReason, str]] = {
         "Blocked: the decision could not be recorded, so the action was stopped. Try again "
         "in a moment. " + _CONTACT
     ),
+    PipelineReason.CHECKS_PENDING: (
+        "Held: the pre-push checks of this change are still running. Retry the push in a "
+        "minute; it goes ahead once the checks pass."
+    ),
+    PipelineReason.CHANGE_REFUSED: (
+        "Blocked: the scan result sent with this action does not belong to it (unknown, "
+        "expired, from another session, or for different commits). Retry the action so "
+        "the change is scanned again. " + _CONTACT
+    ),
     PipelineReason.INTERNAL_ERROR: MESSAGES[ReasonCode.INTERNAL_ERROR],
 }
 
@@ -123,6 +165,8 @@ class DecideResponse(Model):
     decision_id: str
     reason: str
     message: str
+    #: Present only on a deny whose sole reason is the missing change (see module doc).
+    needs_change: NeedsChange | None = None
 
 
 class ActivityResponse(Model):
@@ -151,6 +195,7 @@ class DecisionPipeline:
         engine: GovernanceEngine,
         findings: FindingsService,
         actor_id: str,
+        changes: ChangeService | None = None,
     ) -> None:
         self._clock = clock
         self._audit = audit
@@ -160,6 +205,7 @@ class DecisionPipeline:
         self._engine = engine
         self._findings = findings
         self._actor = actor_id
+        self._changes = changes
 
     # --- decide ----------------------------------------------------------------------
 
@@ -174,27 +220,84 @@ class DecisionPipeline:
             return self._refusal(_Refused(PipelineReason.INTERNAL_ERROR))
 
     def _decide(self, request: Any, device_actor_id: str) -> DecideResponse:
+        try:
+            request, ref = split_change_ref(request)
+        except ValueError:
+            raise _Refused(PipelineReason.INVALID_REPORT, code="invalid_change_ref") from None
         report = self._normalize(request, device_actor_id)
         action = report.action
-        decision, inspection = self.judge(action, report)
+        inspection: InspectionResult | None
+        if ref is not None:
+            inspection = self._change_inspection(action, report, ref, device_actor_id)
+            decision = self._engine.decide(action, self._attribute(action), inspection)
+        else:
+            decision, inspection = self.judge(action, report)
         try:
             self.record_findings(decision, action, inspection)
         except Exception as exc:
             logger.error("governance pipeline: findings not recorded (%s)", type(exc).__name__)
             raise _Refused(PipelineReason.FINDINGS_UNAVAILABLE, action) from exc
-        return _response(decision, action, inspection)
+        return _response(decision, action, inspection, attached=ref is not None)
 
     def judge(
         self, action: ObservedAction, report: NormalizedReport | None
     ) -> tuple[GovernanceDecision, InspectionResult | None]:
         """Steps 2-4 for one normalized action. Raises `_Refused` for a failed step."""
+        attribution = self._attribute(action)
+        inspection = self._inspect(action, report)
+        return self._engine.decide(action, attribution, inspection), inspection
+
+    def _attribute(self, action: ObservedAction) -> Any:
         try:
-            attribution = self._attribution.attribute(action)
+            return self._attribution.attribute(action)
         except Exception as exc:
             logger.error("governance pipeline: attribution failed (%s)", type(exc).__name__)
             raise _Refused(PipelineReason.ATTRIBUTION_UNAVAILABLE, action) from exc
-        inspection = self._inspect(action, report)
-        return self._engine.decide(action, attribution, inspection), inspection
+
+    def _change_inspection(
+        self, action: ObservedAction, report: NormalizedReport, ref: ChangeRef, device: str
+    ) -> InspectionResult:
+        """The merged inspection of a push or commit asked with its change. Raises
+        `_Refused` (change_refused, checks_pending, inspection_failed)."""
+        shape = change_shape(action)
+        if shape is None or not carries_a_change(action) or self._changes is None:
+            raise _Refused(PipelineReason.CHANGE_REFUSED, action, code="change_not_applicable")
+        try:
+            change = self._changes.resolve(
+                ref.change_id, device_actor_id=device, session_id=action.session_id,
+                shape=shape, head=ref.head,
+            )  # fmt: skip
+        except ChangeRefused as refused:
+            raise _Refused(PipelineReason.CHANGE_REFUSED, action, code=refused.code.value) from None
+        except Exception as exc:
+            logger.error("governance pipeline: change lookup failed (%s)", type(exc).__name__)
+            raise _Refused(PipelineReason.INSPECTION_FAILED, action) from exc
+        if change.state is ChangeState.PENDING:
+            raise _Refused(PipelineReason.CHECKS_PENDING, action)
+        parts = [self._inspect_plain(action, report), change.diff]
+        if change.state is ChangeState.FAILED:
+            parts.append(sandbox_failed(action.action_id))
+        elif change.state is ChangeState.DONE:
+            parts.append(change.sandbox)
+        return merge_inspections(action.action_id, parts)
+
+    def _inspect_plain(
+        self, action: ObservedAction, report: NormalizedReport
+    ) -> InspectionResult | None:
+        """The command text's own inspection (secrets and risky code in it). Read as a
+        shell command: the change itself is inspected through its upload, and the intake's
+        `git_push` / `git_commit` kinds would otherwise ask for content here."""
+        command = None if report.inspection is None else report.inspection.command
+        if command is None:
+            return None
+        item = InspectionInput(
+            action_id=action.action_id, kind=ActionKind.SHELL_COMMAND, command=command
+        )
+        try:
+            return self._inspector.inspect(item)
+        except Exception as exc:
+            logger.error("governance pipeline: inspection failed (%s)", type(exc).__name__)
+            raise _Refused(PipelineReason.INSPECTION_FAILED, action) from exc
 
     def record_findings(
         self,
@@ -295,20 +398,35 @@ class DecisionPipeline:
 
 
 def _response(
-    decision: GovernanceDecision, action: ObservedAction, inspection: InspectionResult | None
+    decision: GovernanceDecision,
+    action: ObservedAction,
+    inspection: InspectionResult | None,
+    *,
+    attached: bool = False,
 ) -> DecideResponse:
+    """The API answer. A deny whose only reasons are the missing inspection of a push or
+    commit that can be scanned carries `needs_change` (never when a change was attached)."""
     message = decision.explanation
+    needs: NeedsChange | None = None
     held = (
-        carries_a_change(action)
+        not attached
+        and carries_a_change(action)
         and inspection is not None
         and not inspection.complete
         and decision.verdict is not Verdict.ALLOW
     )
     if held:
-        message = message + PUSH_HELD_NOTE
+        shape = change_shape(action)
+        only_inspection = all(r.code in _INSPECTION_CODES for r in decision.reasons)
+        if shape is not None and only_inspection and decision.verdict is Verdict.DENY:
+            needs = NeedsChange.of(shape)
+            message = message + CHANGE_SCAN_NOTE
+        else:
+            message = message + PLAIN_COMMAND_NOTE
     return DecideResponse(
         verdict=decision.verdict,
         decision_id=decision.decision_id,
         reason=decision.reasons[0].code,
         message=message,
+        needs_change=needs,
     )

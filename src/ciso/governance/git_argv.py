@@ -1,8 +1,16 @@
 """Classification of one `git` invocation: push, history rewrite, config and hooks.
 
-A push whose destination branch cannot be read from the command or from the action's
-target is treated as a push to a protected branch: unknown resolves to the more dangerous
-answer. So is a destination containing a wildcard, `--all` and `--mirror`.
+A push whose destination branch the command does not name is a push to an UNKNOWN
+branch, and unknown counts as protected (review H5): the current branch the source
+reports is not where `push.default`, an upstream or `remote.<name>.push` may send it.
+Destinations are normalised first (`+`, `src:`, `refs/heads/`, `heads/`). A destination
+outside `refs/heads/`, a wildcard, `--all` and `--mirror` are unknown too.
+
+Read-only git runs in the current directory only (review C4): `-C`, `--git-dir`,
+`--work-tree`, `--namespace`, `-c` and `--config-env` all make it not read-only, and the
+analyzer adds that a directory change earlier in the line does too. An alias defined
+with `-c alias.<name>=...` or `git config alias.<name>` hides what runs (obfuscation);
+its `!` command and every configuration value git runs as a program are read as code.
 """
 
 from __future__ import annotations
@@ -18,6 +26,8 @@ from ciso.governance.safe_options import GIT_SAFE, spec_allows
 _GLOBAL_WITH_VALUE = frozenset(
     {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path", "--config-env"}
 )
+#: The only global options that keep git read-only.
+_READ_ONLY_GLOBALS = frozenset({"--no-pager", "-P", "--no-optional-locks"})
 _PUSH_VALUE_OPTIONS = frozenset({"--repo", "-o", "--push-option", "--receive-pack", "--exec"})
 _REWRITE_SUBCOMMANDS = frozenset(
     {"rebase", "filter-branch", "filter-repo", "replace", "update-ref"}
@@ -25,14 +35,26 @@ _REWRITE_SUBCOMMANDS = frozenset(
 _RESET_MODES = frozenset({"--hard", "--soft", "--keep", "--merge", "--mixed"})
 _COMMITISH = re.compile(r".*[~^].*|.*@\{.*|[0-9a-f]{7,40}|origin/.*|upstream/.*")
 _HOOK_KEYS = ("hookspath", "hooks")
+#: Configuration keys whose value git runs as a shell command.
+_EXEC_KEY_RE = re.compile(
+    r"core\.(sshcommand|pager|editor|fsmonitor|askpass)|diff\.external|sequence\.editor"
+    r"|gpg\.(.+\.)?program|pager\..+|.+\.textconv|.+\.cmd|.+\.command"
+    r"|filter\..+\.(clean|smudge|process)|merge\..+\.driver|credential\.helper"
+)
+_FORCE_LONG = frozenset(
+    {"--force", "--force-with-lease", "--force-if-includes", "--delete", "--mirror", "--prune"}
+)
 
 
 class GitFacts(NamedTuple):
     classes: frozenset[C]
     branches: frozenset[str]
     read_only: bool
-    #: POSIX command strings git will run (`rebase -x`, `submodule foreach`, `bisect run`).
+    #: POSIX command strings git will run (`rebase -x`, `submodule foreach`, `bisect run`,
+    #: `!` aliases, configuration values that name a program).
     nested: tuple[str, ...]
+    #: A push whose destination branch cannot be told from the command.
+    unknown_branch: bool = False
 
 
 def _short_flags(args: list[str]) -> set[str]:
@@ -43,41 +65,76 @@ def _short_flags(args: list[str]) -> set[str]:
     return flags
 
 
-def _split_globals(args: list[str], found: set[C]) -> list[str]:
+def _config_value(key: str, value: str, found: set[C], code: list[str]) -> None:
+    """Classes and code of one configuration value being set."""
+    low = key.casefold()
+    if any(k in low for k in _HOOK_KEYS):
+        found.add(C.GIT_HOOKS_CHANGE)
+    if low.startswith("alias."):
+        found.add(C.OBFUSCATION)
+        if value.startswith("!"):
+            code.append(value[1:])
+    elif _EXEC_KEY_RE.fullmatch(low) and value:
+        code.append(value.removeprefix("!"))
+
+
+class _Globals(NamedTuple):
+    rest: list[str]
+    options: list[str]
+    aliases: dict[str, str]
+
+
+def _split_globals(args: list[str], found: set[C], code: list[str]) -> _Globals:
     i = 0
+    aliases: dict[str, str] = {}
     while i < len(args) and args[i].startswith("-"):
         opt, _, inline = args[i].partition("=")
         value = inline
         if opt in _GLOBAL_WITH_VALUE and not inline:
             value = args[i + 1] if i + 1 < len(args) else ""
             i += 1
-        if opt in ("-c", "--config-env"):
+        if opt == "-c":
             found.add(C.GIT_CONFIG_CHANGE)
-            if any(k in value.casefold() for k in _HOOK_KEYS):
+            key, _, setting = value.partition("=")
+            _config_value(key, setting, found, code)
+            if key.casefold().startswith("alias."):
+                aliases[key[6:].casefold()] = setting
+        elif opt == "--config-env":
+            found.add(C.GIT_CONFIG_CHANGE)
+            key = value.partition("=")[0].casefold()
+            if key.startswith("alias.") or _EXEC_KEY_RE.fullmatch(key):
+                found.add(C.OBFUSCATION)  # the value comes from a variable: unknown code
+            if any(k in key for k in _HOOK_KEYS):
                 found.add(C.GIT_HOOKS_CHANGE)
         i += 1
-    return args[i:]
+    return _Globals(args[i:], args[: len(args) - len(args[i:])], aliases)
 
 
-def _push(
-    args: list[str], protected: tuple[str, ...], target_branch: str | None, found: set[C]
-) -> set[str]:
+def _destination(spec: str, found: set[C]) -> str | None:
+    """The branch a refspec lands on, or None when it cannot be told."""
+    if spec.startswith("+"):
+        found.add(C.GIT_FORCE_PUSH)
+        spec = spec[1:]
+    src, colon, dst = spec.partition(":")
+    if colon and not src:
+        found.add(C.GIT_FORCE_PUSH)  # `:dst` deletes the remote branch
+    dest = dst if colon else src
+    if dest.startswith("refs/heads/"):
+        dest = dest[len("refs/heads/") :]
+    elif dest.startswith("refs/"):
+        return None
+    elif dest.startswith("heads/"):
+        dest = dest[len("heads/") :]  # git resolves `heads/x` through `refs/%s`
+    if dest in ("HEAD", "@", "") or any(c in dest for c in "*~^") or "@{" in dest:
+        return None
+    return dest
+
+
+def _push(args: list[str], protected: tuple[str, ...], found: set[C]) -> tuple[set[str], bool]:
     found.add(C.GIT_PUSH)
     flags = _short_flags(args)
     long = {a.partition("=")[0] for a in args if a.startswith("--")}
-    if (
-        "f" in flags
-        or "d" in flags
-        or long
-        & {
-            "--force",
-            "--force-with-lease",
-            "--force-if-includes",
-            "--delete",
-            "--mirror",
-            "--prune",
-        }
-    ):
+    if "f" in flags or "d" in flags or long & _FORCE_LONG:
         found.add(C.GIT_FORCE_PUSH)
     positionals: list[str] = []
     skip = False
@@ -90,34 +147,19 @@ def _push(
             continue
         positionals.append(arg)
     named: set[str] = set()
-    unknown = bool(long & {"--all", "--mirror", "--branches"})
+    unknown = bool(long & {"--all", "--mirror", "--branches"}) or len(positionals) <= 1
     for spec in positionals[1:]:
-        if spec.startswith("+"):
-            found.add(C.GIT_FORCE_PUSH)
-            spec = spec[1:]
-        src, colon, dst = spec.partition(":")
-        if colon and not src:
-            found.add(C.GIT_FORCE_PUSH)
-        dest = (dst if colon else src).removeprefix("refs/heads/")
-        if dest in ("HEAD", "@", ""):
-            unknown = unknown or target_branch is None
-            if target_branch:
-                named.add(target_branch)
-            continue
-        named.add(dest)
-    if len(positionals) <= 1:
-        if target_branch:
-            named.add(target_branch)
-        else:
+        dest = _destination(spec, found)
+        if dest is None:
             unknown = True
-    if unknown or any(
-        "*" in b or any(glob_match(pat, b, "/", casefold=True) for pat in protected) for b in named
-    ):
+        else:
+            named.add(dest)
+    if unknown or any(glob_match(pat, b, "/", casefold=True) for b in named for pat in protected):
         found.add(C.GIT_PUSH_PROTECTED_REF)
-    return named
+    return named, unknown
 
 
-def _config(args: list[str], found: set[C]) -> bool:
+def _config(args: list[str], found: set[C], code: list[str]) -> bool:
     """True when the config call only reads."""
     reads = {
         "--get",
@@ -141,6 +183,11 @@ def _config(args: list[str], found: set[C]) -> bool:
     found.add(C.GIT_CONFIG_CHANGE)
     if any(k in a.casefold() for a in args for k in _HOOK_KEYS):
         found.add(C.GIT_HOOKS_CHANGE)
+    values = positionals[1:] if positionals[:1] == ["set"] else positionals
+    if len(values) >= 2:
+        _config_value(values[0], values[1], found, code)
+    elif values and values[0].casefold().startswith("alias."):
+        found.add(C.OBFUSCATION)
     return False
 
 
@@ -166,7 +213,7 @@ def _rewrite(sub: str, args: list[str]) -> bool:
     return any(checks)
 
 
-def _nested(sub: str, args: list[str]) -> tuple[str, ...]:
+def _nested(sub: str, args: list[str]) -> list[str]:
     out: list[str] = []
     for i, arg in enumerate(args):
         if sub == "rebase" and arg in ("-x", "--exec") and i + 1 < len(args):
@@ -177,12 +224,13 @@ def _nested(sub: str, args: list[str]) -> tuple[str, ...]:
         out.append(" ".join(a for a in args[1:] if a != "--recursive"))
     if sub == "bisect" and args[:1] == ["run"]:
         out.append(" ".join(args[1:]))
-    return tuple(t for t in out if t)
+    return out
 
 
 def _listing_only(sub: str, args: list[str]) -> bool:
     """`remote`, `tag`, `stash` and `reflog` are read-only only in these exact shapes; the
-    subcommand AND every argument after it must fit. A bare `git stash` writes."""
+    subcommand AND every argument after it must fit. A bare `git stash` writes, and
+    `git stash show` prints a diff, so it is not read-only either."""
     positional = [a for a in args if not a.startswith("-")]
     no_options = len(positional) == len(args)
     if sub == "remote":
@@ -194,56 +242,54 @@ def _listing_only(sub: str, args: list[str]) -> bool:
             args[0] in ("-l", "--list") and all(not a.startswith("-") for a in args[1:])
         )
     if sub == "stash":
-        return args == ["list"] or (no_options and args[:1] == ["show"] and len(args) <= 2)
+        return args == ["list"]
     if sub == "reflog":
         return args in ([], ["show"])
     return False
 
 
-def _globals_read_only(options: list[str]) -> bool:
-    """Only `-C <dir>`, `--no-pager`, `-P` and `--no-optional-locks` keep git read-only."""
-    i = 0
-    while i < len(options):
-        if options[i] == "-C":
-            i += 2
-        elif options[i] in ("--no-pager", "-P", "--no-optional-locks"):
-            i += 1
-        else:
-            return False
-    return True
+def _read_only(sub: str, sub_args: list[str], found: set[C], code: list[str]) -> bool:
+    if sub == "config":
+        return _config(sub_args, found, code)
+    if sub == "remote":
+        listing = _listing_only(sub, sub_args)
+        if not listing:
+            found.add(C.GIT_CONFIG_CHANGE)
+        return listing
+    if sub == "branch":
+        return all(
+            a in ("--list", "-a", "-r", "-v", "-vv", "--show-current", "--all") for a in sub_args
+        )
+    if sub in ("tag", "stash", "reflog"):
+        return _listing_only(sub, sub_args)
+    spec = GIT_SAFE.get(sub)
+    return spec is not None and spec_allows(spec, sub_args)
 
 
-def check_git(args: list[str], protected: tuple[str, ...], target_branch: str | None) -> GitFacts:
+def check_git(args: list[str], protected: tuple[str, ...]) -> GitFacts:
     """Classify `git <args>` (literal argument texts)."""
     found: set[C] = set()
-    rest = _split_globals(args, found)
+    code: list[str] = []
+    split = _split_globals(args, found, code)
+    rest = split.rest
     if not rest:
-        return GitFacts(frozenset(found), frozenset(), not found, ())
+        return GitFacts(frozenset(found), frozenset(), False, tuple(c for c in code if c))
+    alias = split.aliases.get(rest[0].casefold())
+    if alias is not None and not alias.startswith("!") and alias.split():
+        rest = alias.split() + rest[1:]  # read what the alias stands for
     sub, sub_args = rest[0], rest[1:]
     branches: set[str] = set()
+    unknown = False
     read_only = False
     if sub == "push":
-        branches = _push(sub_args, protected, target_branch, found)
-    elif sub == "config":
-        read_only = _config(sub_args, found)
-    elif sub == "remote":
-        read_only = _listing_only(sub, sub_args)
-        if not read_only:
-            found.add(C.GIT_CONFIG_CHANGE)
+        branches, unknown = _push(sub_args, protected, found)
     elif sub in ("credential", "credential-store", "credential-cache"):
         found.add(C.CREDENTIAL_ACCESS)
     elif sub == "clean" and ("f" in _short_flags(sub_args) or "--force" in sub_args):
         found.add(C.DESTRUCTIVE_DELETE)
-    elif sub == "branch":
-        read_only = all(
-            a in ("--list", "-a", "-r", "-v", "-vv", "--show-current", "--all") for a in sub_args
-        )
-    elif sub in ("tag", "stash", "reflog"):
-        read_only = _listing_only(sub, sub_args)
     else:
-        spec = GIT_SAFE.get(sub)
-        read_only = spec is not None and spec_allows(spec, sub_args)
-    read_only = read_only and _globals_read_only(args[: len(args) - len(rest)])
+        read_only = _read_only(sub, sub_args, found, code)
+    read_only = read_only and set(split.options) <= _READ_ONLY_GLOBALS
     if sub == "commit":
         found.add(C.GIT_COMMIT)
     if sub in ("commit", "push", "merge", "am") and (
@@ -252,5 +298,5 @@ def check_git(args: list[str], protected: tuple[str, ...], target_branch: str | 
         found.add(C.GIT_HOOKS_CHANGE)
     if _rewrite(sub, sub_args):
         found.add(C.GIT_HISTORY_REWRITE)
-    nested = _nested(sub, sub_args)
-    return GitFacts(frozenset(found), frozenset(branches), read_only and not found, nested)
+    nested = tuple(c for c in (*code, *_nested(sub, sub_args)) if c)
+    return GitFacts(frozenset(found), frozenset(branches), read_only and not found, nested, unknown)

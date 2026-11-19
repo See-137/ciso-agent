@@ -12,6 +12,12 @@ decide  POST /v1/governance/decide before an action. ``deny`` and ``ask`` become
         event's documented decision fields; ``allow`` prints nothing, so the normal
         permission flow still applies. ANY failure exits 2 with a fixed message, which
         blocks PreToolUse and UserPromptSubmit (the hook also sets onFailure "block").
+        A PreToolUse ``deny`` that carries ``needs_change`` (a push or commit whose
+        change must be scanned first) is followed here: the client builds the change
+        with git in the hook's working directory, uploads it to POST /v1/changes and
+        asks decide again with ``change_id`` and ``change_head``; that second answer is
+        the one applied. Any failure on the way blocks. The whole run stays inside
+        AIGOV_HOOK_DEADLINE_SECONDS.
 report  POST /v1/activity after something happened. Never blocks: one retry, then a
         local log line and exit 0.
 
@@ -25,6 +31,10 @@ through the managed settings ``env`` block (managed values override the user's s
     AIGOV_CA_BUNDLE                optional CA bundle (PEM) to verify the service
     AIGOV_SURFACE                  optional surface label, default "cli"
     AIGOV_LOG_FILE                 optional local log path
+    AIGOV_GIT_PATH                 absolute path of the admin-installed git (pre-push;
+                                   unset: a push or commit that needs a scan blocks)
+    AIGOV_HOOK_DEADLINE_SECONDS    the client's whole time budget, below the hook's own
+                                   timeout (pre-push; unset: such a push blocks)
 
 The device token is read from a file, never from the environment (the environment
 reaches every command the agent runs), and is never printed or logged.
@@ -34,6 +44,7 @@ Standard library only. Targets Python 3.10 and later.
 
 from __future__ import annotations
 
+import base64
 import getpass
 import json
 import math
@@ -41,7 +52,9 @@ import os
 import re
 import socket
 import ssl
+import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.parse
@@ -61,7 +74,21 @@ MAX_MESSAGE_CHARS = 1000
 #: Upper bound accepted for a configured network timeout, in seconds.
 MAX_TIMEOUT_SECONDS = 600.0
 
+#: Pre-push bounds. The bundle bound is the sandbox's archive bound (32 MiB); the request
+#: cap equals the service's `MAX_CHANGE_BODY_BYTES` (a test pins the two together).
+MAX_BUNDLE_BYTES = 32 * 1024 * 1024
+MAX_DIFF_BYTES = 4 * 1024 * 1024
+MAX_CHANGE_COMMITS = 1000
+MAX_CHANGE_REQUEST_BYTES = ((MAX_BUNDLE_BYTES + MAX_DIFF_BYTES + 2) // 3) * 4 + 128 * 1024
+MAX_GIT_OUTPUT_BYTES = MAX_DIFF_BYTES
+#: Longest any single git step may take, inside the deadline.
+GIT_STEP_SECONDS = 10.0
+#: Kept back from the deadline for printing the answer; a step needs at least MIN_STEP.
+DEADLINE_MARGIN_SECONDS = 0.5
+MIN_STEP_SECONDS = 0.2
+
 DECIDE_PATH = "/v1/governance/decide"
+CHANGES_PATH = "/v1/changes"
 ACTIVITY_PATH = "/v1/activity"
 REQUEST_FORMAT = "assistant_hook_v1"
 DEFAULT_SURFACE = "cli"
@@ -71,6 +98,11 @@ BLOCK_MESSAGE = (
     "Nothing was run. Ask your IT or security contact if this continues."
 )
 GENERIC_REFUSAL = "Refused by the company AI-governance policy."
+PREPUSH_BLOCK_MESSAGE = (
+    "Blocked: this push or commit could not be prepared for its pre-push scan, so it was "
+    "stopped. Push one branch at a time with a plain git command, or ask your IT or "
+    "security contact if this continues."
+)
 
 ENV_URL = "AIGOV_SERVICE_URL"
 ENV_TOKEN_FILE = "AIGOV_DEVICE_TOKEN_FILE"  # noqa: S105 - a variable name, not a secret
@@ -79,6 +111,8 @@ ENV_REPORT_TIMEOUT = "AIGOV_REPORT_TIMEOUT_SECONDS"
 ENV_CA_BUNDLE = "AIGOV_CA_BUNDLE"
 ENV_SURFACE = "AIGOV_SURFACE"
 ENV_LOG_FILE = "AIGOV_LOG_FILE"
+ENV_GIT = "AIGOV_GIT_PATH"
+ENV_DEADLINE = "AIGOV_HOOK_DEADLINE_SECONDS"
 
 LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1"})
 VERDICTS = frozenset({"allow", "deny", "ask"})
@@ -90,6 +124,10 @@ _DECISION_ID_RE = re.compile(r"[A-Za-z0-9_.:-]{1,128}")
 _SURFACE_RE = re.compile(r"[a-z][a-z0-9_-]{0,31}")
 _CONTROL_RE = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 _ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
+_COMMIT_RE = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
+_REF_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,199}")
+_REMOTE_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
+_CHANGE_ID_RE = re.compile(r"chg_[0-9A-HJKMNP-TV-Z]{26}")
 
 
 class ClientError(Exception):
@@ -397,7 +435,7 @@ def render(event: str, verdict: Verdict) -> HookOutput:
     return HookOutput(0, json.dumps(output))
 
 
-def block_output(event: str | None) -> HookOutput:
+def block_output(event: str | None, message: str = BLOCK_MESSAGE) -> HookOutput:
     stdout = ""
     if event == "SessionStart":
         # Measured 2026-11-18 (2.1.316, -p): this did not stop the session; the prompt
@@ -413,7 +451,7 @@ def block_output(event: str | None) -> HookOutput:
                 }
             }
         )
-    return HookOutput(2, stdout, BLOCK_MESSAGE + "\n")
+    return HookOutput(2, stdout, message + "\n")
 
 
 # --- local log -------------------------------------------------------------------------
@@ -437,6 +475,292 @@ def log_line(environ: Mapping[str, str], mode: str, event: str, outcome: str) ->
         return
 
 
+# --- pre-push change upload (docs/skill/decision-api.md, "Pre-push change upload") -----
+
+
+@dataclass(frozen=True)
+class GitResult:
+    returncode: int
+    stdout: bytes
+
+
+class GitRunner(Protocol):
+    """Runs git with a fixed argv list (never a shell) in ``cwd``. Raises ClientError on
+    a timeout or when git cannot be started."""
+
+    def run(
+        self, argv: list[str], cwd: str, timeout: float, env: Mapping[str, str]
+    ) -> GitResult: ...
+
+
+class SubprocessGitRunner:
+    """The real runner: ``shell=False``, stdin closed, stderr dropped, stdout through a
+    temporary file read back with a cap, killed at the timeout."""
+
+    def run(self, argv: list[str], cwd: str, timeout: float, env: Mapping[str, str]) -> GitResult:
+        with tempfile.TemporaryFile() as out:
+            try:
+                done = subprocess.run(  # noqa: S603 - fixed argv list, absolute git, no shell
+                    argv,
+                    cwd=cwd,
+                    env=dict(env),
+                    stdin=subprocess.DEVNULL,
+                    stdout=out,
+                    stderr=subprocess.DEVNULL,
+                    timeout=timeout,
+                    shell=False,
+                    check=False,
+                )
+            except subprocess.TimeoutExpired as error:
+                raise ClientError("git_timeout") from error
+            except OSError as error:
+                raise ClientError("git_unavailable") from error
+            out.seek(0)
+            return GitResult(done.returncode, out.read(MAX_GIT_OUTPUT_BYTES + 1))
+
+
+class Budget:
+    """The hook's own deadline, measured from the start of the run. Every step gets at
+    most what is left minus a margin; a step that would not fit blocks instead."""
+
+    def __init__(self, seconds: float, monotonic: Callable[[], float], start: float) -> None:
+        self._end = start + seconds
+        self._now = monotonic
+
+    def timeout(self, limit: float) -> float:
+        left = self._end - self._now() - DEADLINE_MARGIN_SECONDS
+        if left < MIN_STEP_SECONDS:
+            raise ClientError("deadline")
+        return min(limit, left)
+
+
+@dataclass(frozen=True)
+class NeedsChange:
+    kind: str
+    remote: str | None
+    branch: str | None
+    source: str | None
+
+
+def parse_needs_change(response: HttpResponse) -> NeedsChange | None:
+    """The ``needs_change`` of a decide answer (already validated by parse_verdict)."""
+    data = json.loads(response.body.decode("utf-8"))
+    raw = data.get("needs_change")
+    if raw is None:
+        return None
+    if not isinstance(raw, dict) or set(raw) - {"kind", "remote", "branch", "source"}:
+        raise ClientError("bad_needs_change")
+    kind = raw.get("kind")
+    if kind not in ("push", "commit"):
+        raise ClientError("bad_needs_change")
+    names = [raw.get(key) for key in ("remote", "branch", "source")]
+    for name in names:
+        if name is not None and not (isinstance(name, str) and _REF_RE.fullmatch(name)):
+            raise ClientError("bad_needs_change")
+    if names[0] is not None and not _REMOTE_RE.fullmatch(names[0]):
+        raise ClientError("bad_needs_change")
+    return NeedsChange(str(kind), names[0], names[1], names[2])
+
+
+class Git:
+    """git in the hook's working directory, with options that keep the repository's own
+    configuration from running programs (fsmonitor, external diff, textconv, hooks)."""
+
+    def __init__(
+        self,
+        runner: GitRunner,
+        executable: str,
+        cwd: str,
+        budget: Budget,
+        environ: Mapping[str, str],
+        nohooks: str,
+    ) -> None:
+        self._runner = runner
+        self._cwd = cwd
+        self._budget = budget
+        self._prefix = [
+            executable, "--no-pager", "--no-optional-locks",
+            "-c", "core.fsmonitor=false", "-c", "core.hooksPath=" + nohooks,
+            "-c", "diff.external=", "-c", "protocol.allow=never",
+        ]  # fmt: skip
+        self.env = {k: v for k, v in environ.items() if not k.upper().startswith("GIT_")}
+        self.env.update({"GIT_TERMINAL_PROMPT": "0", "GIT_OPTIONAL_LOCKS": "0", "LC_ALL": "C"})
+
+    def raw(self, *args: str, cwd: str | None = None) -> GitResult:
+        argv = [*self._prefix, *args]
+        timeout = self._budget.timeout(GIT_STEP_SECONDS)
+        return self._runner.run(argv, cwd or self._cwd, timeout, self.env)
+
+    def out(self, *args: str, code: str, cwd: str | None = None) -> str:
+        result = self.raw(*args, cwd=cwd)
+        if result.returncode != 0 or len(result.stdout) > MAX_GIT_OUTPUT_BYTES:
+            raise ClientError(code)
+        return result.stdout.decode("utf-8", errors="replace").strip()
+
+    def commit_of(self, ref: str) -> str | None:
+        result = self.raw("rev-parse", "--verify", "--quiet", "--end-of-options", ref + "^{commit}")
+        text = result.stdout.decode("ascii", errors="replace").strip()
+        if result.returncode != 0 or not _COMMIT_RE.fullmatch(text):
+            return None
+        return text
+
+
+def _base(git: Git, needs: NeedsChange, head: str) -> str:
+    """Where the pushed range starts: the merge base with the remote branch, else with
+    the remote's default branch."""
+    candidates = [f"refs/remotes/{needs.remote}/{needs.branch}"]
+    candidates += [f"refs/remotes/{needs.remote}/{name}" for name in ("HEAD", "main", "master")]
+    for ref in candidates:
+        if git.commit_of(ref) is None:
+            continue
+        base = git.out("merge-base", head, ref, code="no_merge_base")
+        if _COMMIT_RE.fullmatch(base):
+            return base
+    raise ClientError("no_base")
+
+
+def _bundle(git: Git, tmp: str, head: str) -> bytes:
+    """A complete, cloneable bundle whose HEAD is the pushed commit, built in a scratch
+    bare repository that borrows the objects (the sandbox clones it and needs a HEAD)."""
+    objects = git.out(
+        "rev-parse", "--path-format=absolute", "--git-path", "objects", code="git_dir"
+    )
+    bare = str(Path(tmp) / "b.git")
+    git.out("init", "--bare", "-q", "--template=", bare, code="bundle", cwd=tmp)
+    alternates = Path(bare) / "objects" / "info"
+    alternates.mkdir(parents=True, exist_ok=True)
+    # Bytes, not text: a text write on Windows ends the line with CR LF, and git then
+    # reads a path that ends in CR (measured in the real run).
+    (alternates / "alternates").write_bytes(objects.encode("utf-8") + b"\n")
+    scratch = ("--git-dir=" + bare,)
+    git.out(*scratch, "update-ref", "refs/heads/aigov", head, code="bundle", cwd=tmp)
+    git.out(*scratch, "symbolic-ref", "HEAD", "refs/heads/aigov", code="bundle", cwd=tmp)
+    target = str(Path(tmp) / "change.bundle")
+    git.out(*scratch, "bundle", "create", "-q", target, "HEAD", "refs/heads/aigov",
+            code="bundle", cwd=tmp)  # fmt: skip
+    with Path(target).open("rb") as handle:
+        data = handle.read(MAX_BUNDLE_BYTES + 1)
+    if len(data) > MAX_BUNDLE_BYTES:
+        raise ClientError("bundle_too_large")
+    return data
+
+
+def _diff(git: Git, *args: str) -> bytes:
+    result = git.raw("diff", "--no-ext-diff", "--no-textconv", "--no-color", *args)
+    if result.returncode != 0:
+        raise ClientError("diff_failed")
+    if len(result.stdout) > MAX_DIFF_BYTES:
+        raise ClientError("diff_too_large")
+    return result.stdout
+
+
+def build_change(git: Git, needs: NeedsChange, tmp: str) -> dict[str, Any]:
+    """The upload body (without session_id) for ``needs``. Any failure raises."""
+    if needs.kind == "commit":
+        tree = git.out("write-tree", code="write_tree")
+        if not _COMMIT_RE.fullmatch(tree):
+            raise ClientError("write_tree")
+        diff = _diff(git, "--cached")
+        return {"kind": "commit", "head": tree, "base": git.commit_of("HEAD"),
+                "diff_b64": base64.b64encode(diff).decode("ascii")}  # fmt: skip
+    if needs.remote is None or needs.branch is None:
+        # Only a push that names its remote and branch is scanned: without them,
+        # configuration (push.default, remote.<name>.push, .mirror) decides what is sent.
+        raise ClientError("push_names_no_branch")
+    ref = "HEAD" if needs.source is None else "refs/heads/" + needs.source
+    head = git.commit_of(ref)
+    if head is None:
+        raise ClientError("no_source_commit")
+    base = _base(git, needs, head)
+    listed = git.out("rev-list", f"--max-count={MAX_CHANGE_COMMITS + 1}", f"{base}..{head}",
+                     code="rev_list").split()  # fmt: skip
+    if not listed:
+        raise ClientError("nothing_to_push")
+    if len(listed) > MAX_CHANGE_COMMITS or not all(_COMMIT_RE.fullmatch(c) for c in listed):
+        raise ClientError("too_many_commits")
+    return {
+        "kind": "push", "remote": needs.remote, "branch": needs.branch, "source": needs.source,
+        "head": head, "base": base, "commits": listed,
+        "diff_b64": base64.b64encode(_diff(git, base, head)).decode("ascii"),
+        "bundle_b64": base64.b64encode(_bundle(git, tmp, head)).decode("ascii"),
+    }  # fmt: skip
+
+
+@dataclass(frozen=True)
+class PrepushContext:
+    environ: Mapping[str, str]
+    transport: Transport
+    runner: GitRunner
+    budget: Budget
+
+
+def git_executable(environ: Mapping[str, str]) -> str:
+    """The admin-installed git named by the managed environment: absolute, a file. A bare
+    ``git`` would be looked up in PATH or the agent's working directory."""
+    path = environ.get(ENV_GIT)
+    if not path or not Path(path).is_absolute() or not Path(path).is_file():
+        raise ClientError("no_git_path")
+    return path
+
+
+def hook_cwd(payload: Mapping[str, Any]) -> str:
+    cwd = payload.get("cwd")
+    if not isinstance(cwd, str) or not Path(cwd).is_absolute() or not Path(cwd).is_dir():
+        raise ClientError("bad_cwd")
+    return cwd
+
+
+def upload_change(
+    payload: Mapping[str, Any], config: ClientConfig, needs: NeedsChange, ctx: PrepushContext
+) -> tuple[str, str]:
+    """Build and upload the change; returns (change_id, head)."""
+    executable = git_executable(ctx.environ)
+    cwd = hook_cwd(payload)
+    with tempfile.TemporaryDirectory(prefix="aigov-") as tmp:
+        nohooks = str(Path(tmp) / "no-hooks")
+        git = Git(ctx.runner, executable, cwd, ctx.budget, ctx.environ, nohooks)
+        change = build_change(git, needs, tmp)
+    body = json.dumps(
+        {"session_id": payload.get("session_id"), **change}, separators=(",", ":")
+    ).encode("utf-8")
+    if len(body) > MAX_CHANGE_REQUEST_BYTES:
+        raise ClientError("change_too_large")
+    response = ctx.transport.post(
+        config.service_url + CHANGES_PATH, body, headers_for(config),
+        ctx.budget.timeout(config.timeout), config.context,
+    )  # fmt: skip
+    if response.status != 201 or len(response.body) > MAX_RESPONSE_BYTES:
+        raise ClientError(f"upload_status_{response.status}")
+    try:
+        change_id = json.loads(response.body.decode("utf-8")).get("change_id")
+    except (UnicodeDecodeError, ValueError, AttributeError) as error:
+        raise ClientError("bad_upload_answer") from error
+    if not isinstance(change_id, str) or not _CHANGE_ID_RE.fullmatch(change_id):
+        raise ClientError("bad_upload_answer")
+    return change_id, str(change["head"])
+
+
+def decide_with_change(
+    payload: Mapping[str, Any],
+    config: ClientConfig,
+    body: bytes,
+    needs: NeedsChange,
+    ctx: PrepushContext,
+) -> Verdict:
+    """Upload the change, then ask decide again with it attached."""
+    change_id, head = upload_change(payload, config, needs, ctx)
+    request = json.loads(body.decode("utf-8"))
+    request.update({"change_id": change_id, "change_head": head})
+    again = json.dumps(request, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    if len(again) > MAX_REQUEST_BYTES:
+        raise ClientError("too_large")
+    response = ctx.transport.post(
+        config.service_url + DECIDE_PATH, again, headers_for(config),
+        ctx.budget.timeout(config.timeout), config.context,
+    )  # fmt: skip
+    return parse_verdict(response)
+
+
 # --- modes -----------------------------------------------------------------------------
 
 
@@ -457,10 +781,24 @@ def _prepare(
     return payload, config, body
 
 
+@dataclass(frozen=True)
+class Clocked:
+    """The git runner and the monotonic clock the pre-push step uses (seams for tests)."""
+
+    runner: GitRunner
+    monotonic: Callable[[], float]
+    start: float
+
+
 def run_decide(
-    raw: bytes, environ: Mapping[str, str], transport: Transport, machine: Machine
+    raw: bytes,
+    environ: Mapping[str, str],
+    transport: Transport,
+    machine: Machine,
+    clocked: Clocked | None = None,
 ) -> HookOutput:
     event: str | None = None
+    prepush = False
     try:
         payload, config, body = _prepare(raw, environ, ENV_DECIDE_TIMEOUT, machine)
         event = str(payload["hook_event_name"])
@@ -471,12 +809,22 @@ def run_decide(
             config.timeout,
             config.context,
         )
-        return render(event, parse_verdict(response))
+        verdict = parse_verdict(response)
+        needs = parse_needs_change(response) if verdict.verdict == "deny" else None
+        if needs is not None and event == "PreToolUse":
+            prepush = True
+            if clocked is None:
+                raise ClientError("no_git_runner")
+            seconds = parse_timeout(environ.get(ENV_DEADLINE))
+            budget = Budget(seconds, clocked.monotonic, clocked.start)
+            ctx = PrepushContext(environ, transport, clocked.runner, budget)
+            verdict = decide_with_change(payload, config, body, needs, ctx)
+        return render(event, verdict)
     except ClientError as error:
-        log_line(environ, "decide", event or "-", error.code)
+        log_line(environ, "decide", event or "-", ("prepush:" if prepush else "") + error.code)
     except Exception as error:
         log_line(environ, "decide", event or "-", type(error).__name__)
-    return block_output(event)
+    return block_output(event, PREPUSH_BLOCK_MESSAGE if prepush else BLOCK_MESSAGE)
 
 
 def run_report(
@@ -518,12 +866,16 @@ def main(
     is_windows: bool = sys.platform == "win32",
     getuser: Callable[[], str] = posix_or_env_user,
     isolated: bool = bool(sys.flags.isolated),
+    git_runner: GitRunner | None = None,
+    monotonic: Callable[[], float] = time.monotonic,
 ) -> int:
     """Run one hook. Unless the interpreter runs isolated (`python -I`: no PYTHONPATH,
     PYTHONSTARTUP, user site or script-directory imports a user could plant), nothing is
     sent: decide mode blocks and report mode drops the record with a log line."""
+    start = monotonic()
     mode = argv[1] if len(argv) == 2 else ""
     machine = Machine(hostname, is_windows, getuser)
+    clocked = Clocked(git_runner or SubprocessGitRunner(), monotonic, start)
     if not isolated:
         stdin.read()
         log_line(environ, mode or "unknown", "", "refused:not_isolated")
@@ -531,7 +883,7 @@ def main(
     elif mode == "report":
         result = run_report(stdin.read(), environ, transport, machine)
     elif mode == "decide":
-        result = run_decide(stdin.read(), environ, transport, machine)
+        result = run_decide(stdin.read(), environ, transport, machine, clocked)
     else:
         result = block_output(None)
     stdout.write(result.stdout)

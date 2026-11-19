@@ -30,7 +30,14 @@ from ciso.governance.globs import SEPARATORS, check_pattern
 
 #: Kinds that never change anything. A ruleset may declare only these read-only.
 PURE_READ_KINDS: frozenset[ActionKind] = frozenset(
-    {ActionKind.PROMPT, ActionKind.FILE_READ, ActionKind.SESSION_START, ActionKind.SESSION_END}
+    {
+        ActionKind.PROMPT,
+        ActionKind.FILE_READ,
+        ActionKind.SESSION_START,
+        ActionKind.SESSION_END,
+        # The agent finished a turn: reported after the fact, changes nothing (queue Q6).
+        ActionKind.TURN_END,
+    }
 )
 #: Most rules in one ruleset; most patterns per target attribute.
 MAX_RULES = 256

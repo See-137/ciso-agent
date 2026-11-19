@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging
 import re
 from datetime import datetime
-from typing import Any
+from typing import Any, Final
 
 from pydantic import ValidationError
 from sqlalchemy import Connection, Engine, select
@@ -28,8 +28,10 @@ from ciso.agents.attribution import agent_outcome, decide_person, match_agent
 from ciso.agents.gate import write_audit
 from ciso.agents.models import (
     AGENT_REF_KIND,
+    DEVICE_ACTOR_CLAIM,
     DEVICE_FACT,
     DEVICE_TARGET_KEY,
+    ISSUER_VERIFIED,
     MAX_FACTS,
     MAX_LIST,
     MAX_SESSION_CLAIMS,
@@ -37,12 +39,19 @@ from ciso.agents.models import (
     AgentRecord,
     AgentStatus,
     AttributionReason,
+    DeviceAssignment,
     IdentityBinding,
     SeenClaim,
     SessionRecord,
     check_person_ref,
 )
-from ciso.common.activity import AgentClass, Attribution, ObservedAction
+from ciso.common.activity import (
+    ActivitySource,
+    AgentClass,
+    Attribution,
+    IdentityClaim,
+    ObservedAction,
+)
 from ciso.common.clock import Clock
 from ciso.common.db import read_connection
 from ciso.common.enums import ActorType, AuditOutcome, InformationState
@@ -56,6 +65,8 @@ logger = logging.getLogger(__name__)
 REGISTRY_ACTOR = "ciso_agents"
 _SURFACE_RE = re.compile(r"[a-z0-9][a-z0-9_.-]{0,31}")
 _STORAGE_ERRORS = (SQLAlchemyError, ValidationError, IntegrityFailure, ValueError)
+#: `_device_actor` result when one report names two different verified device actors.
+_AMBIGUOUS: Final = "<ambiguous>"
 
 
 class AgentRegistry:
@@ -96,22 +107,31 @@ class AgentRegistry:
     ) -> tuple[Attribution, AgentRecord | None]:
         device = action.target.get(DEVICE_TARGET_KEY, "")
         surface = action.surface if _SURFACE_RE.fullmatch(action.surface) else ""
+        reporter = _device_actor(action)
         reasons: list[AttributionReason] = []
         row = store.find_session_row(conn, action.session_id)
         if row is None:
+            if reporter is _AMBIGUOUS:
+                return _mismatch(action.session_id), None
             conn.execute(
                 t.sessions.insert().values(
                     session_id=action.session_id,
                     first_seen=now,
                     last_seen=now,
                     device=device,
+                    device_actor=reporter or "",
                     surface=surface,
                     state=InformationState.UNKNOWN.value,
                     claim_overflow=0,
                 )
             )
-            agent_ref, overflow = None, False
+            agent_ref, overflow, owner = None, False, reporter or ""
         else:
+            owner = row.device_actor
+            if reporter is _AMBIGUOUS or (owner and not _may_join(action, reporter, owner)):
+                return _mismatch(action.session_id), None
+            if not owner and reporter:
+                owner = reporter
             if device and row.device != device:
                 reasons.append(AttributionReason.SESSION_DEVICE_CHANGED)
             device, surface = row.device, row.surface
@@ -119,15 +139,17 @@ class AgentRegistry:
 
         claims, overflow = self._record_claims(conn, action, now, overflow)
         keys = [(c.kind, c.subject) for c in claims]
-        person = decide_person(claims, store.active_bindings(conn, keys), overflow)
+        device_people = store.assigned_people(conn, owner) if owner else None
+        person = decide_person(claims, store.active_bindings(conn, keys), overflow, device_people)
 
         created: AgentRecord | None = None
         agent: AgentRecord | None
         if agent_ref is not None:
             agent = _sticky_agent(conn, agent_ref)
         else:
-            facts = frozenset(keys) | ({(DEVICE_FACT, device)} if device else frozenset())
-            match = match_agent(store.candidate_agents(conn, surface, facts), surface, facts)
+            verified, facts = _session_facts(claims, device)
+            candidates = store.candidate_agents(conn, surface, facts)
+            match = match_agent(candidates, surface, facts, verified)
             agent = match.agent
             if match.ambiguous:
                 reasons.append(AttributionReason.AGENT_AMBIGUOUS)
@@ -140,6 +162,7 @@ class AgentRegistry:
             .where(t.sessions.c.session_id == action.session_id)
             .values(
                 last_seen=now,
+                device_actor=owner,
                 agent_ref=agent.ref if agent is not None else None,
                 person_ref=person.person_ref,
                 state=state.value,
@@ -160,7 +183,7 @@ class AgentRegistry:
         self, conn: Connection, action: ObservedAction, now: datetime, overflow: bool
     ) -> tuple[tuple[SeenClaim, ...], bool]:
         known = store.seen_claims(conn, action.session_id)
-        new = [(c.kind, c.subject, c.verified) for c in action.identity_claims]
+        new = [(c.kind, c.subject, _trusted(c, action.source)) for c in action.identity_claims]
         rows = store.add_claims(conn, action.session_id, new, known, now)
         room = MAX_SESSION_CLAIMS - len(known)
         if len(rows) > room:
@@ -175,6 +198,26 @@ class AgentRegistry:
         return known + added, overflow
 
     # -- reads -----------------------------------------------------------------------
+
+    def list_device_assignments(
+        self,
+        *,
+        device_actor: str | None = None,
+        person_ref: str | None = None,
+        include_ended: bool = False,
+    ) -> tuple[DeviceAssignment, ...]:
+        """Device assignments, oldest first, at most `MAX_LIST`. Active ones only unless
+        `include_ended`."""
+        a = t.device_assignments
+        query = select(a).order_by(a.c.assigned_at, a.c.id).limit(MAX_LIST)
+        if device_actor is not None:
+            query = query.where(a.c.device_actor == device_actor)
+        if person_ref is not None:
+            query = query.where(a.c.person_ref == check_person_ref(person_ref))
+        if not include_ended:
+            query = query.where(a.c.unassigned_at.is_(None))
+        with self._reading() as conn:
+            return tuple(store.assignment_from_row(row) for row in conn.execute(query))
 
     def get_agent(self, agent_id: str) -> AgentRecord:
         with self._reading() as conn:
@@ -239,6 +282,57 @@ class AgentRegistry:
 
     def _reading(self) -> Any:
         return read_connection(self._engine)
+
+
+def _trusted(claim: IdentityClaim, source: ActivitySource) -> bool:
+    """A claim is verified only when its kind may be vouched for by this source (M5)."""
+    return claim.verified and ISSUER_VERIFIED.get(claim.kind) is source
+
+
+def _device_actor(action: ObservedAction) -> str | None:
+    """The verified device actor of this report: None when there is none, `_AMBIGUOUS`
+    when it names two."""
+    found = {
+        c.subject
+        for c in action.identity_claims
+        if c.kind == DEVICE_ACTOR_CLAIM and _trusted(c, action.source)
+    }
+    if len(found) > 1:
+        return _AMBIGUOUS
+    return next(iter(found), None)
+
+
+def _may_join(action: ObservedAction, reporter: str | None, owner: str) -> bool:
+    """May this report use a session bound to device actor `owner` (review H4)? Only its
+    own device, or a signed central gate report that carries its own verified claim (it is
+    then judged on that claim joined with the session's, never on the session's alone)."""
+    if reporter is not None:
+        return reporter == owner
+    return action.source is ActivitySource.CENTRAL_GATE and any(
+        _trusted(c, action.source) for c in action.identity_claims
+    )
+
+
+def _mismatch(session_id: str) -> Attribution:
+    """Nothing of the session is inherited and nothing is written to it."""
+    return Attribution(
+        session_id=session_id,
+        state=InformationState.DISPUTED,
+        reasons=(AttributionReason.SESSION_DEVICE_MISMATCH.value,),
+    )
+
+
+def _session_facts(
+    claims: tuple[SeenClaim, ...], device: str
+) -> tuple[frozenset[tuple[str, str]], frozenset[tuple[str, str]]]:
+    """(verified facts, every fact). An unverified device-actor claim is no fact at all;
+    the device name is a client claim, never verified."""
+    verified = frozenset((c.kind, c.subject) for c in claims if c.verified)
+    loose = frozenset(
+        (c.kind, c.subject) for c in claims if not c.verified and c.kind != DEVICE_ACTOR_CLAIM
+    )
+    named = frozenset({(DEVICE_FACT, device)}) if device else frozenset()
+    return verified, verified | loose | named
 
 
 def _sticky_agent(conn: Connection, ref: str) -> AgentRecord:

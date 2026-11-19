@@ -64,6 +64,7 @@
       "AIGOV_SERVICE_URL": "https://REPLACE_ME_SERVICE_HOST",
       "AIGOV_DECIDE_TIMEOUT_SECONDS": "8",
       "AIGOV_REPORT_TIMEOUT_SECONDS": "1",
+      "AIGOV_HOOK_DEADLINE_SECONDS": "14",
       "AIGOV_SURFACE": "cli",
       "CLAUDE_CODE_SYNC_PLUGIN_INSTALL": "1"
     },
@@ -78,13 +79,16 @@
   },
   "platform_env": {
     "windows": {
-      "AIGOV_DEVICE_TOKEN_FILE": "C:\\ProgramData\\AIGovernance\\device-token"
+      "AIGOV_DEVICE_TOKEN_FILE": "C:\\ProgramData\\AIGovernance\\device-token",
+      "AIGOV_GIT_PATH": "C:\\Program Files\\Git\\cmd\\git.exe"
     },
     "macos": {
-      "AIGOV_DEVICE_TOKEN_FILE": "/Library/Application Support/AIGovernance/device-token"
+      "AIGOV_DEVICE_TOKEN_FILE": "/Library/Application Support/AIGovernance/device-token",
+      "AIGOV_GIT_PATH": "/usr/bin/git"
     },
     "linux": {
-      "AIGOV_DEVICE_TOKEN_FILE": "/etc/ai-governance/device-token"
+      "AIGOV_DEVICE_TOKEN_FILE": "/etc/ai-governance/device-token",
+      "AIGOV_GIT_PATH": "/usr/bin/git"
     }
   },
   "platform_deny": {

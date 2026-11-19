@@ -29,12 +29,17 @@ BOB = "act_bob"
 ALICE_REF = f"actor:{ALICE}"
 BOB_REF = f"actor:{BOB}"
 SCOPED_ADMIN = "act_scoped_admin"
+#: Device actors (identity actors of type service), as the device directory creates them.
+DEVICE_A = "svc_device_a"
+DEVICE_B = "svc_device_b"
 
 
 @pytest.fixture
 def people(principals: FakePrincipals) -> FakePrincipals:
     principals.register(make_principal(ALICE, ActorType.HUMAN, Role.EMPLOYEE))
     principals.register(make_principal(BOB, ActorType.HUMAN, Role.EMPLOYEE))
+    principals.register(make_principal(DEVICE_A, ActorType.SERVICE))
+    principals.register(make_principal(DEVICE_B, ActorType.SERVICE))
     principals.register(
         make_principal(
             SCOPED_ADMIN,
@@ -68,18 +73,24 @@ def make_action(clock: FixedClock) -> ActionFactory:
         claims: tuple[tuple[str, str, bool], ...] = (),
         device: str | None = "WS-0142",
         surface: str = "cli",
+        *,
+        source: ActivitySource = ActivitySource.HOOK,
+        device_actor: str | None = None,
     ) -> ObservedAction:
+        """`device_actor` adds the verified claim the hook intake derives from the device
+        token, as `ciso.intake.normalize_hook_report` does."""
+        every = tuple(IdentityClaim(kind=k, subject=s, verified=v) for k, s, v in claims)
+        if device_actor is not None:
+            every += (IdentityClaim(kind="device_actor", subject=device_actor, verified=True),)
         return ObservedAction(
             action_id=new_id("obs"),
             session_id=session,
-            source=ActivitySource.HOOK,
+            source=source,
             phase=Phase.BEFORE,
             kind=ActionKind.SHELL_COMMAND,
             surface=surface,
             received_at=clock.now(),
-            identity_claims=tuple(
-                IdentityClaim(kind=k, subject=s, verified=v) for k, s, v in claims
-            ),
+            identity_claims=every,
             target={"device": device} if device else {},
         )
 

@@ -45,3 +45,12 @@ def test_surface_must_be_equal() -> None:
     assert matches(_agent(facts=DEVICE), "cli", SESSION)
     assert not matches(_agent(surface="ide", facts=DEVICE), "cli", SESSION)
     assert match_agent([_agent(surface="ide", facts=DEVICE)], "cli", SESSION).agent is None
+
+
+def test_organizational_agent_needs_every_fact_verified() -> None:
+    org = _agent(facts=DEVICE).model_copy(update={"agent_class": AgentClass.ORGANIZATIONAL})
+    assert not matches(org, "cli", SESSION)
+    assert not matches(org, "cli", SESSION, frozenset({("os_account", "CORP\alice")}))
+    assert matches(org, "cli", SESSION, frozenset({("device", "WS-1")}))
+    employee = _agent(facts=DEVICE).model_copy(update={"agent_class": AgentClass.EMPLOYEE_OPERATED})
+    assert matches(employee, "cli", SESSION)

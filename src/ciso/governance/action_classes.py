@@ -22,7 +22,7 @@ _COMMIT_OR_PUSH = frozenset({C.GIT_PUSH, C.GIT_FORCE_PUSH, C.GIT_COMMIT})
 
 
 def _path_classes(path: str, config: ClassifierConfig, *, writes: bool) -> frozenset[C]:
-    probe = Analyzer(config, None)
+    probe = Analyzer(config)
     probe.path(path, writes=writes)
     return frozenset(probe.classes)
 

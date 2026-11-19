@@ -3,7 +3,8 @@
 Shape from the platform's endpoint documentation ("Return a verdict"): HTTP 200 with
 `{"action": "allow"}` or `{"action": "deny", "deny_reason": ..., "reference_id": ...}`.
 `deny_reason` is shown to the person, at most 500 characters. `reference_id` is at most
-50 characters from `[A-Za-z0-9._:/-]`, recorded by the platform, never shown.
+50 characters from `[A-Za-z0-9._:/-]`, recorded by the platform, never shown; it is the
+decision id (queue Q9), the id the engineer quotes and findings and audit carry.
 
 The gate can only allow or deny, so `ask` is rendered as deny: a held action may not run
 while nobody can be asked through this channel. One verdict covers a whole frame, so a
@@ -37,7 +38,7 @@ def render_verdict(decision: GovernanceDecision) -> dict[str, str]:
     reason = decision.explanation or (
         f"Stopped by the company's AI policy ({decision.reasons[0].code})."
     )
-    return _deny(reason, decision.action_id)
+    return _deny(reason, decision.decision_id)
 
 
 def render_frame_verdict(decisions: Sequence[GovernanceDecision]) -> dict[str, str]:

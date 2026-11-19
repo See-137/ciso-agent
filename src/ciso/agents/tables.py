@@ -19,7 +19,8 @@ from sqlalchemy import (
 
 from ciso.common.db import UtcDateTime, operational_metadata, register_schema
 
-register_schema("agents", 1)
+#: 2: sessions remember their device actor; device assignments (review H3, H4, M5).
+register_schema("agents", 2)
 
 _TEXT = 512
 _REF = 200
@@ -83,6 +84,8 @@ sessions = Table(
     Column("first_seen", UtcDateTime(), nullable=False),
     Column("last_seen", UtcDateTime(), nullable=False),
     Column("device", String(_TEXT), nullable=False),
+    #: The device actor that first reported the session; "" until one did.
+    Column("device_actor", String(64), nullable=False, default=""),
     Column("surface", String(_TEXT), nullable=False),
     Column("agent_ref", String(_REF), nullable=True),
     Column("person_ref", String(_REF), nullable=True),
@@ -100,4 +103,26 @@ session_claims = Table(
     Column("verified", Boolean(), nullable=False),
     Column("first_seen", UtcDateTime(), nullable=False),
     PrimaryKeyConstraint("session_id", "kind", "subject", "verified"),
+)
+
+device_assignments = Table(
+    "agents_device_assignments",
+    operational_metadata,
+    Column("id", String(40), primary_key=True),
+    Column("device_actor", String(64), nullable=False),
+    Column("person_ref", String(_REF), nullable=False),
+    Column("assigned_at", UtcDateTime(), nullable=False),
+    Column("assigned_by", String(64), nullable=False),
+    Column("unassigned_at", UtcDateTime(), nullable=True),
+    Column("unassigned_by", String(64), nullable=True),
+    Index("ix_agents_device_assignments_person", "person_ref"),
+)
+
+#: At most one ACTIVE assignment per (device actor, person). Ended rows stay as history.
+Index(
+    "uq_agents_device_assignments_active",
+    device_assignments.c.device_actor,
+    device_assignments.c.person_ref,
+    unique=True,
+    sqlite_where=device_assignments.c.unassigned_at.is_(None),
 )

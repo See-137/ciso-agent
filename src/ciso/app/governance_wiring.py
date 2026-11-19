@@ -12,7 +12,10 @@
 - `FindingsService`, alerting into `data_dir/alerts` through `DirectoryAlertSink`, with
   a `RecommendationCatalog` built from inspection's rule table remediations and
   governance's reason-code messages;
-- the device directory and, when all three central gate values are set, the `CentralGate`.
+- the device directory and, when all three central gate values are set, the `CentralGate`;
+- `ChangeService` (the pre-push change store, `data_dir/changes`), handed to the
+  pipeline; its sandbox jobs go on the container's job queue and are run by
+  `python -m ciso.app.sandbox_worker`.
 
 Person references. A person is `actor:<identity actor id>` (`PERSON_REF_KIND`): the agents
 registry binds claims to identity actors, so the human actor IS the person. The identity
@@ -31,6 +34,7 @@ from typing import Final
 from sqlalchemy import Engine
 
 from ciso.agents import AgentAdmin, AgentRegistry
+from ciso.app.changes import ChangeService
 from ciso.app.devices import DeviceDirectory
 from ciso.app.governance_gate import GateEndpoint
 from ciso.app.governance_pipeline import DecisionPipeline
@@ -52,7 +56,8 @@ from ciso.governance import (
 from ciso.identity import Authenticator, IdentityService
 from ciso.inspection import RULE_TABLE, Inspector
 from ciso.intake import BoundedSeenMessages, CentralGate
-from ciso.vault import EnvSecretStore
+from ciso.vault import EnvSecretStore, resolve_key_bytes
+from ciso.workflows import JobQueue
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +65,8 @@ logger = logging.getLogger(__name__)
 GOVERNANCE_ACTOR: Final = "ciso_governance"
 #: Directory under `data_dir` where `DirectoryAlertSink` writes alert files.
 ALERTS_DIR: Final = "alerts"
+#: Directory under `data_dir` where uploaded changes are kept, encrypted.
+CHANGES_DIR: Final = "changes"
 
 
 class ActorPersonLinks:
@@ -119,6 +126,8 @@ class GovernanceServices:
     findings: FindingsService
     devices: DeviceDirectory
     pipeline: DecisionPipeline
+    #: The pre-push change store (`POST /v1/changes`).
+    changes: ChangeService
     #: The central gate endpoint. Denies every delivery while a gate value is unset.
     gate: GateEndpoint
     warnings: tuple[str, ...]
@@ -131,12 +140,27 @@ def governance_warnings(
     found = list(settings.governance.unset())
     if ruleset.deny_all:
         found.append("governance ruleset did not load (every governed action is denied)")
-    ref = settings.governance.central_gate_secret_ref
+    gov = settings.governance
+    ref = gov.central_gate_secret_ref
     if ref is not None:
         try:
             secrets.get(ref)
         except CisoError:
             found.append("governance.central_gate_secret_ref (unresolvable)")
+    if gov.change_key_ref is not None:
+        try:
+            resolve_key_bytes(secrets, gov.change_key_ref)
+        except CisoError:
+            found.append("governance.change_key_ref (unresolvable or too short)")
+    if gov.sandbox_token_ref is not None:
+        try:
+            secrets.get(gov.sandbox_token_ref)
+        except CisoError:
+            found.append("governance.sandbox_token_ref (unresolvable)")
+    lease = settings.safety.queue_lease_seconds
+    timeout = gov.sandbox_timeout_seconds
+    if lease is not None and timeout is not None and timeout >= lease:
+        found.append("governance.sandbox_timeout_seconds (not below safety.queue_lease_seconds)")
     return tuple(found)
 
 
@@ -151,6 +175,7 @@ def build_governance(
     authenticator: Authenticator,
     redactor: Redactor,
     secrets: EnvSecretStore,
+    queue: JobQueue,
 ) -> GovernanceServices:
     """Every governance service. `killswitch` must be the container's gated reader."""
     ruleset = governance_ruleset(settings)
@@ -170,9 +195,16 @@ def build_governance(
     devices = DeviceDirectory(
         engine, clock=clock, audit=audit, identity=identity, authenticator=authenticator
     )
+    changes = ChangeService(
+        engine, clock=clock, audit=audit, queue=queue, secrets=secrets,
+        key_ref=settings.governance.change_key_ref,
+        retention_seconds=settings.governance.change_retention_seconds,
+        store_dir=settings.data_dir / CHANGES_DIR, actor_id=GOVERNANCE_ACTOR,
+    )  # fmt: skip
     pipeline = DecisionPipeline(
         clock=clock, audit=audit, redactor=redactor, attribution=registry,
         inspector=inspector, engine=decider, findings=findings, actor_id=GOVERNANCE_ACTOR,
+        changes=changes,
     )  # fmt: skip
     gate = GateEndpoint(
         build_central_gate(settings, secrets=secrets, clock=clock, redactor=redactor),
@@ -186,6 +218,7 @@ def build_governance(
         findings=findings,
         devices=devices,
         pipeline=pipeline,
+        changes=changes,
         gate=gate,
         warnings=governance_warnings(settings, ruleset, secrets),
     )

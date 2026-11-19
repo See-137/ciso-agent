@@ -4,10 +4,12 @@ Writing these lets an agent plant credentials, run code on the next commit, buil
 session, or change the assistant's own rules, which is a known way out of a sandbox. The
 check works on the path text only; it never touches the file system.
 
-Normalisation: both separators, `..` collapsed, case ignored everywhere (the strictest
-reading: Windows and the default macOS file system ignore case), and the Windows quirks
-that still open the same file are undone: trailing dots and spaces on a component, an
-alternate data stream suffix (`name::$DATA`), and the `\\\\?\\` long-path prefix.
+Normalisation (review M1): both separators, `..` collapsed, case ignored everywhere (the
+strictest reading: Windows and the default macOS file system ignore case), and the Windows
+quirks that still open the same file are undone: trailing dots and spaces on a component,
+an alternate data stream suffix (`name::$DATA`), and the `\\\\?\\` long-path prefix. A
+segment that is a glob, a variable or an 8.3 short name matches every sensitive name it
+could stand for (`ciso.inspection.path_wild`).
 
 The path literals below are the file names the tools themselves use; the rule ids and
 texts stay generic.
@@ -22,6 +24,7 @@ from typing import Final
 
 from ciso.common.activity import Severity
 from ciso.inspection._collect import Collector, location
+from ciso.inspection.path_wild import candidates, is_wild
 from ciso.inspection.rules import Rule
 
 _PATH = "sensitive_path"
@@ -68,6 +71,20 @@ GIT_HOOK = Rule(
     "Change to a git hook or git configuration that runs code",
     "Agents may not install or change git hooks; ask a person to review the hook",
 )
+SSH_ACCESS = Rule(
+    "path.ssh_access",
+    _PATH,
+    Severity.HIGH,
+    "Write to an SSH access list or SSH client configuration",
+    "Agents may not grant SSH access or change SSH settings; a person must make this change",
+)
+EDITOR_AUTORUN = Rule(
+    "path.editor_autorun",
+    _PATH,
+    Severity.HIGH,
+    "Change to an editor task, launch or settings file that can run code",
+    "Editor tasks and run configurations need review by a person before they are kept",
+)
 ASSISTANT_CONFIG = Rule(
     "path.assistant_config",
     _PATH,
@@ -93,7 +110,8 @@ _PATH_RULES: Final[tuple[_PathRule, ...]] = (
         ASSISTANT_CONFIG,
         _p(
             r"\.claude/.+|\.claude-plugin/.+|\.mcp\.json|claude(?:\.local)?\.md"
-            r"|\.claude\.json"
+            r"|\.claude\.json|agents\.md|\.cursor/.+|\.cursorrules|\.windsurf/.+"
+            r"|\.windsurfrules|\.github/copilot-instructions\.md"
         ),
     ),
     _PathRule(
@@ -126,6 +144,14 @@ _PATH_RULES: Final[tuple[_PathRule, ...]] = (
             r"|\.gitlab/ci/.+|azure-pipelines[^/]*\.ya?ml|\.azure-pipelines/.+|\.azuredevops/.+"
             r"|jenkinsfile[^/]*|\.circleci/.+|bitbucket-pipelines\.yml|\.buildkite/.+"
             r"|\.travis\.yml|\.drone\.yml|\.woodpecker\.ya?ml|\.woodpecker/.+"
+        ),
+    ),
+    _PathRule(SSH_ACCESS, _p(r"\.ssh/(?:authorized_keys2?|config|rc)")),
+    _PathRule(
+        EDITOR_AUTORUN,
+        _p(
+            r"\.vscode/(?:tasks|launch|settings)\.json|\.idea/runconfigurations/.+"
+            r"|\.idea/workspace\.xml|[^/]+\.code-workspace"
         ),
     ),
     _PathRule(
@@ -161,11 +187,25 @@ def normalise_path(path: str) -> str:
 
 
 def sensitive_path_rules(path: str) -> tuple[Rule, ...]:
-    """Every sensitive-path rule the path matches (several can apply to one path)."""
+    """Every sensitive-path rule the path matches (several can apply to one path).
+
+    A segment that is a glob, a variable or an 8.3 short name matches every name it could
+    stand for (`ciso.inspection.path_wild`); too many such unknowns match every rule."""
     normal = normalise_path(path)
     if not normal or normal == ".":
         return ()
-    return tuple(entry.rule for entry in _PATH_RULES if entry.pattern.fullmatch(normal))
+    paths = [normal]
+    segments = normal.split("/")
+    if any(is_wild(segment) for segment in segments):
+        expanded = candidates(segments)
+        if expanded is None:
+            return PATH_RULES
+        paths.extend(expanded)
+    return tuple(
+        entry.rule
+        for entry in _PATH_RULES
+        if any(entry.pattern.fullmatch(candidate) for candidate in paths)
+    )
 
 
 def check_path(path: str, out: Collector, *, shown_as: str | None = None) -> None:

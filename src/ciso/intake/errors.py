@@ -23,6 +23,7 @@ class RefusalCode(StrEnum):
     UNKNOWN_EVENT = "unknown_event"
     EVENT_MISMATCH = "event_mismatch"
     CLAIM_MARKED_VERIFIED = "claim_marked_verified"
+    CLAIM_KIND_RESERVED = "claim_kind_reserved"
     MISSING_CORRELATION_ID = "missing_correlation_id"
     MALFORMED_TOOL_INPUT = "malformed_tool_input"
     # Central gate delivery and signature.

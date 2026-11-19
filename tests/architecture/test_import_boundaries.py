@@ -280,8 +280,9 @@ NETWORK_ATTRIBUTES = frozenset(
         "open_unix_connection start_server start_unix_server connect_tcp"
     )
 )
-#: Modules exempt from the network rule. Empty: nothing in this build talks to a network.
-NETWORK_ALLOWLIST: frozenset[str] = frozenset()
+#: Modules exempt from the network rule. Exactly one: the sandbox client (httpx), which
+#: sends a change to the sandbox service (spec C5, docs/skill/decision-api.md pre-push).
+NETWORK_ALLOWLIST: frozenset[str] = frozenset({"ciso.app.sandbox_client"})
 
 #: Libraries that own an event loop or a listening server -> the only modules that may
 #: refer to them. Measured from the tree; `asyncio` has no user at all.

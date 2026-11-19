@@ -2,9 +2,14 @@
 
 The text is read twice, once as a POSIX shell and once as PowerShell/cmd, because the
 hook does not say reliably which shell will run it. The danger classes found by either
-reading are kept (ambiguity resolves to the more dangerous answer). `unparseable` is kept
-when neither reading could read the text with confidence; `read_only_command` only when
-every successful reading found nothing but known readers.
+reading are kept (ambiguity resolves to the more dangerous answer).
+
+`unparseable` is added when EITHER reading fails or finds something it cannot read, and
+the danger classes of the other reading are kept with it (review M3); also when the text
+holds a character PowerShell reads as a quote, dash or space but a POSIX shell reads as a
+letter (review C3, M2), or when the readings disagree on text with other non-ASCII
+characters. `read_only_command` only when both readings parsed and found nothing but
+plain readers, and the text is ASCII.
 """
 
 from __future__ import annotations
@@ -18,6 +23,7 @@ from ciso.governance.analysis import analyze
 from ciso.governance.classes import CommandClass
 from ciso.governance.danger_paths import AGENT_CONFIG_PATHS, CREDENTIAL_PATHS
 from ciso.governance.globs import check_pattern
+from ciso.governance.lexer_types import POWERSHELL_SPECIAL
 from ciso.governance.shell_lexer import Dialect, HiddenCommand, ParseError, parse_script
 
 #: Most patterns of one kind a ruleset may add.
@@ -50,13 +56,17 @@ class ClassifierConfig(Model):
 
 
 class CommandAnalysis(Model):
-    """Classes found, and the branches a push in the command names (empty if none)."""
+    """Classes found, the branches a push in the command names (empty if none), and
+    whether a push names no destination branch (`unknown_branch`: the branch is unknown,
+    which restrictive rules treat as protected)."""
 
     classes: frozenset[CommandClass]
     branches: frozenset[str] = frozenset()
+    unknown_branch: bool = False
 
 
 _UNPARSEABLE = CommandAnalysis(classes=frozenset({CommandClass.UNPARSEABLE}))
+_MARKERS = frozenset({CommandClass.UNPARSEABLE, CommandClass.READ_ONLY_COMMAND})
 
 
 def classify_command(
@@ -68,13 +78,15 @@ def classify_command(
 ) -> CommandAnalysis:
     """Classify `command`. Never raises: anything unexpected is `unparseable`.
 
-    `target_branch` is the branch the source reported for the action, used when a push
-    names none. `truncated` means the source cut the text, so it is not fully visible.
+    `target_branch` is accepted for callers but no longer decides anything: a push that
+    names no destination is a push to an unknown branch (review H5). `truncated` means the
+    source cut the text, so it is not fully visible.
     """
+    del target_branch
     if not command or not command.strip():
         return _UNPARSEABLE
     try:
-        result = _classify(command, config, target_branch)
+        result = _classify(command, config)
     except Exception:
         return _UNPARSEABLE
     if truncated:
@@ -83,36 +95,37 @@ def classify_command(
     return result
 
 
-def _classify(command: str, config: ClassifierConfig, target_branch: str | None) -> CommandAnalysis:
-    danger: set[CommandClass] = set()
+def _classify(command: str, config: ClassifierConfig) -> CommandAnalysis:
+    readings: list[frozenset[CommandClass]] = []
     branches: set[str] = set()
-    readings = 0
-    unreadable = 0
-    read_only_everywhere = True
-    hidden = False
+    unknown_branch = False
+    failed = False
     for dialect in Dialect:
         try:
             script = parse_script(command, dialect)
-            found, named = analyze(script, config, target_branch)
-        except HiddenCommand:
-            hidden = True
-            unreadable += 1
+            found, named, unknown = analyze(script, config)
+        except (HiddenCommand, ParseError):
+            failed = True
             continue
-        except ParseError:
-            unreadable += 1
-            continue
-        readings += 1
+        readings.append(frozenset(found))
         branches |= named
-        if CommandClass.UNPARSEABLE in found:
-            unreadable += 1
-        if CommandClass.READ_ONLY_COMMAND not in found:
-            read_only_everywhere = False
-        danger |= found - {CommandClass.UNPARSEABLE, CommandClass.READ_ONLY_COMMAND}
+        unknown_branch = unknown_branch or unknown
+    danger = {c for found in readings for c in found} - _MARKERS
+    unparseable = (
+        failed
+        or any(CommandClass.UNPARSEABLE in found for found in readings)
+        or any(ch in POWERSHELL_SPECIAL for ch in command)
+        or (not command.isascii() and len(set(readings)) > 1)
+    )
     classes = set(danger)
-    if unreadable == len(Dialect) or hidden:
+    if unparseable:
         classes.add(CommandClass.UNPARSEABLE)
-    elif readings == len(Dialect) and unreadable == 0 and read_only_everywhere and not danger:
-        # Read-only only when EVERY reading parsed and found nothing but readers: a
-        # reading that failed may be the shell that actually runs the text.
+    elif (
+        command.isascii()
+        and len(readings) == len(Dialect)
+        and all(found == {CommandClass.READ_ONLY_COMMAND} for found in readings)
+    ):
         classes.add(CommandClass.READ_ONLY_COMMAND)
-    return CommandAnalysis(classes=frozenset(classes), branches=frozenset(branches))
+    return CommandAnalysis(
+        classes=frozenset(classes), branches=frozenset(branches), unknown_branch=unknown_branch
+    )

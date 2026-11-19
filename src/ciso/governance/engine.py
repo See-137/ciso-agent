@@ -17,7 +17,8 @@ override them:
 
 Then the rules (`ciso.governance.rules`). A matched rule that requires an inspection
 which is missing or incomplete gives the ruleset's `missing_inspection` effect (deny
-unless the file says ask). An `unparseable` command is never allowed (ask at most).
+unless the file says ask). An `unparseable` command is never allowed: an allow becomes an
+ask, and a deny that the command's other classes earn stays a deny (review M3).
 Every decision is audited; if the audit write fails, a BEFORE-phase action is denied.
 Any exception while deciding is a deny with reason `internal_error`.
 """
@@ -178,7 +179,7 @@ class GovernanceEngine:
             known, roles = self._person(attribution, action.target)
         except _IdentityDown:
             return _deny(ReasonCode.IDENTITY_UNAVAILABLE, classes=classes)
-        targets = _targets(action.target, analysis.branches)
+        targets = _targets(action.target, analysis.branches, unknown_branch=analysis.unknown_branch)
         facts = ActionFacts(
             kind=action.kind,
             phase=action.phase,
@@ -323,12 +324,19 @@ class GovernanceEngine:
         )
 
 
-def _targets(target: Mapping[str, str], branches: frozenset[str]) -> dict[str, frozenset[str]]:
+def _targets(
+    target: Mapping[str, str], branches: frozenset[str], *, unknown_branch: bool
+) -> dict[str, frozenset[str]]:
+    """Target facts for the rules. A push that names no destination makes the branch
+    unknown (the reported current branch is not where it lands), and an unknown fact
+    satisfies every restriction (review H5)."""
     out: dict[str, frozenset[str]] = {
         key: frozenset({value}) for key, value in target.items() if key in SEPARATORS and value
     }
     if branches:
         out["branch"] = out.get("branch", frozenset()) | branches
+    if unknown_branch:
+        out.pop("branch", None)
     return out
 
 

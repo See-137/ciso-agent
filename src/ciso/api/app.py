@@ -45,6 +45,7 @@ from ciso.api.routers.external_inference import register_external_inference_rout
 from ciso.api.routers.findings import register_findings_routes
 from ciso.api.routers.governance import register_governance_routes
 from ciso.api.routers.system import register_system_routes
+from ciso.app.change_models import MAX_CHANGE_BODY_BYTES
 from ciso.app.container import Container
 from ciso.common.enums import AuditOutcome
 from ciso.common.errors import (
@@ -273,7 +274,7 @@ def create_app(container: Container) -> FastAPI:
     app.add_middleware(
         BodyLimitMiddleware,
         default_limit=MAX_BODY_BYTES,
-        limits={"/v1/central-gate": MAX_GATE_BODY_BYTES},
+        limits={"/v1/central-gate": MAX_GATE_BODY_BYTES, "/v1/changes": MAX_CHANGE_BODY_BYTES},
     )
     app.add_middleware(RequestMiddleware, container=container)
     undeclared = undeclared_routes(app)

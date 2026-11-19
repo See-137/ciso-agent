@@ -53,6 +53,17 @@ CREDENTIAL_PATHS: tuple[str, ...] = (
     "/etc/gshadow",
     "**/config/sam",
     "**/config/security",
+    # Aligned with the inspection lane's list (review H1) and the process environment (H2).
+    "**/.aws/config",
+    "**/.azure/**",
+    "**/.config/gcloud/**",
+    "**/application_default_credentials.json",
+    "**/.config/gh/hosts.yml",
+    "**/credentials.tfrc.json",
+    "**/.terraform.d/credentials*",
+    "**/.cargo/credentials*",
+    "**/*.ppk",
+    "/proc/**/environ",
 )
 
 AGENT_CONFIG_PATHS: tuple[str, ...] = (

@@ -87,9 +87,6 @@ SAFE: dict[str, SafeSpec] = {
     "readlink": SafeSpec("fenmqsvz"),
     "true": SafeSpec(""),
     "false": SafeSpec(""),
-    "test": SafeSpec("abcdefghknprstuwxzGLOSeqnetlegtltgeoant"),
-    "[": SafeSpec("abcdefghknprstuwxzGLOSeqnetlegtltgeoant"),
-    "[[": SafeSpec("abcdefghknprstuwxzGLOSeqnetlegtltgeoant"),
     "sort": SafeSpec(
         "bdfgiMhnRrsuVkt",
         _l("--numeric-sort --reverse --unique --key --field-separator --human-numeric-sort"),
@@ -159,23 +156,14 @@ SAFE["find"] = SafeSpec(
     ),
 )
 
-_LOG = _l(
-    "--oneline --graph --decorate --all --stat --format --pretty --author --since --until "
-    "--grep --patch --name-only --name-status --no-merges --max-count --reverse --follow "
-    "--abbrev-commit --date --no-color --color --first-parent --shortstat --numstat "
-    "--no-ext-diff --no-textconv --cached --staged --unified --word-diff --check "
-    "--ignore-all-space --exit-code --quiet --summary --abbrev"
-)
 #: git subcommand -> what keeps it read-only. `--output`, `--ext-diff`,
-#: `--open-files-in-pager` and anything unknown are off the lists.
+#: `--open-files-in-pager` and anything unknown are off the lists. `diff`, `log`, `show`,
+#: `blame` and `grep` are never read-only: a diff or text-conversion driver in the
+#: repository's configuration runs a program for them (review C4).
 GIT_SAFE: dict[str, SafeSpec] = {
     "status": SafeSpec(
         "sbuvz", _l("--short --branch --porcelain --untracked-files --ignored --verbose --long")
     ),
-    "log": SafeSpec("npSGM", _LOG, numeric=True),
-    "diff": SafeSpec("UwMCRbz", _LOG),
-    "show": SafeSpec("sUwM", _LOG),
-    "blame": SafeSpec("LwMCesln", _l("--porcelain --line-porcelain --date")),
     "rev-parse": SafeSpec(
         "q",
         _l(

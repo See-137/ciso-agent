@@ -37,3 +37,31 @@ devices = Table(
     Column("revoked_by", String(64), nullable=True),
     Index("ix_app_devices_name", "name"),
 )
+
+#: Changes uploaded for their pre-push scan (`ciso.app.changes`). The change itself (diff
+#: and bundle) is a file under `data_dir/changes`, encrypted; this row holds what the
+#: decision needs (who sent it, what it covers, the inspection results, which hold no
+#: content). `deleted_at` is set when the file is removed; the row stays as the record.
+changes = Table(
+    "app_changes",
+    operational_metadata,
+    Column("change_id", String(40), primary_key=True),
+    Column("device_actor_id", String(64), nullable=False),
+    Column("session_id", String(128), nullable=False),
+    Column("kind", String(16), nullable=False),
+    Column("remote", String(64), nullable=True),
+    Column("branch", String(200), nullable=True),
+    Column("source", String(200), nullable=True),
+    Column("head", String(64), nullable=False),
+    Column("base", String(64), nullable=True),
+    Column("commits", Text, nullable=False),
+    Column("fingerprint", String(64), nullable=False),
+    Column("state", String(16), nullable=False),
+    Column("diff_result", Text, nullable=False),
+    Column("sandbox_result", Text, nullable=True),
+    Column("created_at", UtcDateTime, nullable=False),
+    Column("expires_at", UtcDateTime, nullable=False),
+    Column("report_at", UtcDateTime, nullable=True),
+    Column("deleted_at", UtcDateTime, nullable=True),
+    Index("ix_app_changes_fingerprint", "fingerprint"),
+)

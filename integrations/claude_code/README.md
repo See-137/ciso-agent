@@ -35,6 +35,8 @@ The wire contract is `docs/skill/decision-api.md`. The product is `docs/skill/sp
   - `AIGOV_CA_BUNDLE`, optional
   - `AIGOV_SURFACE`, optional
   - `AIGOV_LOG_FILE`, optional
+  - `AIGOV_GIT_PATH`: absolute path of the admin-installed git, used for the pre-push upload
+  - `AIGOV_HOOK_DEADLINE_SECONDS`: the client's whole time budget (the pack sets 14, below the 15-second decide hook timeout)
 - The timeouts have no defaults. If one is unset, decide mode blocks and report mode drops the record.
 - The device token is read from a file, never from the environment, because the environment reaches every command the agent runs. It is never printed or logged.
 - TLS certificates are verified by default. A CA bundle can be configured. Plain `http` is refused to anything but `localhost` or `127.0.0.1`. Redirects are refused, because a redirect could carry the bearer token elsewhere.
@@ -50,6 +52,11 @@ The wire contract is `docs/skill/decision-api.md`. The product is `docs/skill/sp
   - a status other than 200
   - malformed JSON, an unknown verdict or a bad decision id
   - an oversized request or answer
+- Pre-push upload (`docs/skill/decision-api.md`, "Pre-push change upload"): when a `PreToolUse` deny carries `needs_change`, the client builds the change with git in the hook's `cwd` and uploads it to `POST /v1/changes`, then asks `decide` again with `change_id` and `change_head` and applies that second answer.
+  - git is the `AIGOV_GIT_PATH` executable (absolute; a bare `git` could be found in the agent's working directory), run from a fixed argv list without a shell, stdin closed, a per-step timeout, no `GIT_*` variables, and options that stop the repository's own configuration from running programs (`core.fsmonitor=false`, empty `diff.external`, `--no-ext-diff --no-textconv`, an empty hooks path, `protocol.allow=never`).
+  - Push: the commits from the merge base with `<remote>/<branch>` (else the remote's `HEAD`, `main` or `master`) to the pushed branch (`source`, or HEAD for `HEAD:<branch>`); the diff (at most 4 MiB) and a complete bundle whose HEAD is the pushed commit (at most 32 MiB), built in a scratch bare repository that borrows the objects. Commit: `git diff --cached` and the staged tree id.
+  - Only a push that names its remote and one branch is built. A bare `git push`, `--all`, `--mirror`, tags, deletes or refspec lists are refused by the service with a message to push one named branch at a time.
+  - Every failure (git, size, upload, a bad answer) and running out of `AIGOV_HOOK_DEADLINE_SECONDS` blocks with a fixed message.
 - Report mode posts to `/v1/activity` and expects 202. It retries once, then writes a local log line (time, mode, event, outcome code; no content) and exits 0.
 
 ## Deployment
@@ -111,7 +118,8 @@ From the spec's coverage section (section 5), and from the docs:
 - **Identity:** the `os_account` claim is read from the environment and is never marked verified. The user controls their own environment, so it is a hint for the service, not proof.
 - **The device token can be read by the user,** because the hook runs as the user. The user could replay it from another tool. It identifies the machine only.
 - **First session after rollout:** the hooks come with the managed settings, so they run from the first session. Only the advisory skill comes with the plugin; if the marketplace cannot be cloned the agent lacks the advice, not the checks. `CLAUDE_CODE_SYNC_PLUGIN_INSTALL=1` makes `-p` runs wait for the install. For seeded images see `CLAUDE_CODE_PLUGIN_SEED_DIR` in the org-plugins docs.
-- **Pushes and commits are refused for now.** A hook report does not carry the change being pushed or committed, so its inspection is incomplete and the ruleset's `missing_inspection: deny` refuses it (also inside a longer shell command). The engineer sees the rule's message plus a fixed note that pushes by AI agents are held until the pre-push scan exists, and should push by hand after review. The sandbox lane (change upload and the asynchronous pre-push scan) lifts this.
+- **Pushes and commits are scanned before they run.** The client uploads the change (see "Client behaviour"); the service inspects the diff at once and the sandbox worker sends the bundle to the sandbox. Until the sandbox report is back the push is held (`checks_pending`: "retry the push in a minute"). The uploaded change is bound to the device and the SESSION: a retry in a new session uploads and scans again. A push inside a longer shell command, or one that does not name its branch, cannot be scanned and is refused.
+- **The packaged default ruleset has no rule that allows a scanned push**, and none that denies failed tests: with it, a clean scanned push is asked and a push with failed tests is asked too. The real run below used a deployment ruleset with two added rules (`tests/e2e/prepush_ruleset.py`); adopting them is a governance decision.
 - **PowerShell commands** (the assistant's `PowerShell` tool on Windows) are read by a POSIX shell grammar; syntax it cannot read is `unparseable` and is never allowed automatically.
 - **Machine administrators** can edit or remove the managed source. MDM redeployment is the documented mitigation.
 - **`SessionStart` cannot block.** Measured here: a `continue: false` from `SessionStart` did not stop a `-p` session. The prompt and tool hooks are what stop actions.
@@ -157,6 +165,28 @@ Afterwards: four findings (both denials and their inspection findings, attribute
 person and the agent), three alert files under `data/alerts`, and `GET /v1/audit/verify`
 returned `ok`. `Stop` events are recorded as `turn_end`, and the default ruleset answers
 them `ask` (no rule covers that kind yet).
+
+## Pre-push run against the real service, measured 2026-11-19 (Claude Code 2.1.316, Windows 11, model haiku)
+
+Setup: the governance API (`python -m ciso.api`) on `127.0.0.1:18767` and the sandbox
+worker (`python -m ciso.app.sandbox_worker`) with the provisional settings on a scratch
+data directory and the deployment ruleset written by `tests/e2e/prepush_ruleset.py`; a
+stdlib stub of the sandbox's `POST /v1/jobs` on `127.0.0.1:18790` answering clean or with
+2 failed tests; the REAL `client/hook_client.py` from hooks generated by `managed_hooks`
+(venv interpreter, `-I`), `AIGOV_GIT_PATH` set to the machine's git; a throwaway repository
+with a local bare remote (`main` pushed by hand; `feature-a` with one clean commit,
+`feature-b` with a failing test). Docker was not used.
+
+| Run | What happened | Result |
+|---|---|---|
+| 1 | The first attempt found a real bug: the scratch repository's `alternates` file was written in text mode, so on Windows git read a path ending in CR and the bundle step failed. The client blocked with the fixed pre-push message (fail closed). Fixed (bytes write) with a regression test. | remote unchanged |
+| 2, `git push origin feature-a`, worker not started | upload (`governance.change.submit`), then `deny` `checks_pending` | remote unchanged |
+| 3, same push in a NEW session after the report was in | held again: a new session uploads a new change (by design, changes are bound to their session) | remote unchanged |
+| 4, push then retry in the same session | attempt 1 `checks_pending`; attempt 2 reused the uploaded change and got `allow` (`rule_allow`, rule `allow-scanned-push-known-people`) | bare remote `refs/heads/feature-a` = local `8528f09` |
+| 5, `git push origin feature-b`, stub answers 2 failed tests, retry in the same session | attempt 1 `checks_pending`; attempt 2 `deny` (`rule_deny`, rule `deny-high-findings-in-scanned-push-or-commit`) | bare remote has no `feature-b` |
+
+Every decision above is in the audit log with its reason codes and matched rules. Every
+process started for the run was stopped and both ports were free afterwards.
 
 ## Local test, measured 2026-11-18 (plugin hooks, before the move to managed hooks) (Claude Code 2.1.316, Windows 11, model haiku)
 

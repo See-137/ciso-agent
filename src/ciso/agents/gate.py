@@ -4,6 +4,8 @@ Order, for every change:
 1. Resolve the caller NOW through the injected `PrincipalResolver`, by actor id only. A
    resolver that raises is a refusal (`FailClosed`). Refused: audit DENIED, raise.
 2. Audit an ATTEMPT. If that fails nothing has changed.
+   Then the optional `precheck` runs (it may consult the resolver about the change's
+   targets); a refusal there is audited like a refusal of the change.
 3. Make the change in one short `BEGIN IMMEDIATE` transaction. Neither the audit sink nor
    the resolver is called while it is open.
 4. Audit the RESULT (SUCCESS, or DENIED / FAILED with the error). A failed RESULT audit
@@ -74,6 +76,7 @@ class AdminGate:
         change: Change,
         *,
         admin_only: bool = True,
+        precheck: Callable[[], None] | None = None,
     ) -> Any:
         """Run `change` in the order of the module docstring and return its result.
 
@@ -98,6 +101,8 @@ class AdminGate:
 
         self._record(actor_id, actor_type, action, target, AuditOutcome.ATTEMPT, details)
         try:
+            if precheck is not None:
+                precheck()
             with self._engine.begin() as conn:
                 result, result_details = change(conn, self._clock.now(), acting)
         except Exception as exc:

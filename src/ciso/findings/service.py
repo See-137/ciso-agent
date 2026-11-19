@@ -31,6 +31,7 @@ from ciso.findings.models import (
     FINDING_PREFIX,
     MAX_PAGE,
     RECORD_ACTION,
+    TRANSITION_PREFIX,
     Alert,
     AlertStatus,
     AlertTrigger,
@@ -147,20 +148,7 @@ class FindingsService(Access):
                 created.append(item.finding_id)
                 severe = item.severity in rules.ALERT_LEVELS
             else:
-                item = existing.model_copy(
-                    update={
-                        "occurrences": existing.occurrences + 1,
-                        "last_seen": now,
-                        "last_decision_id": decision_id,
-                        "severity": rules.worse(existing.severity, draft.severity),
-                        "version": existing.version + 1,
-                    }
-                )
-                store.replace(conn, existing, item)
-                severe = (
-                    item.severity in rules.ALERT_LEVELS
-                    and existing.severity not in rules.ALERT_LEVELS
-                )
+                item, severe = self._repeat(conn, existing, draft, decision_id, now)
             by_id[item.finding_id] = item
             if severe:
                 alerts.append(self._alert(item, AlertTrigger.SEVERE_FINDING, decision_id, now))
@@ -169,6 +157,43 @@ class FindingsService(Access):
         for pending in alerts:
             store.insert_alert(conn, pending)
         return tuple(by_id.values()), tuple(created), tuple(alerts)
+
+    def _repeat(
+        self,
+        conn: Connection,
+        existing: Finding,
+        draft: rules.Draft,
+        decision_id: str,
+        now: datetime,
+    ) -> tuple[Finding, bool]:
+        """Fold one more occurrence into an active finding (review L1). It alerts when the
+        repeat raises the finding's severity into an alert level, and when a repeat at an
+        alert level lands on an ACKNOWLEDGED finding: that finding goes back to `open`
+        (recorded as a transition by the service actor), so an acknowledgement, by the
+        person the finding is about or anyone else, never quiets later severe activity."""
+        severity = rules.worse(existing.severity, draft.severity)
+        raised = severity is not existing.severity and severity in rules.ALERT_LEVELS
+        reopen = (
+            existing.status is FindingStatus.ACKNOWLEDGED and draft.severity in rules.ALERT_LEVELS
+        )
+        update: dict[str, Any] = {
+            "occurrences": existing.occurrences + 1,
+            "last_seen": now,
+            "last_decision_id": decision_id,
+            "severity": severity,
+            "version": existing.version + 1,
+        }
+        if reopen:
+            update |= {
+                "status": FindingStatus.OPEN,
+                "status_changed_by": self._service_actor,
+                "status_changed_at": now,
+            }
+        item = existing.model_copy(update=update)
+        store.replace(conn, existing, item)
+        if reopen:
+            store.insert_transition(conn, new_id(TRANSITION_PREFIX), existing, item)
+        return item, raised or reopen
 
     def _new_finding(
         self,

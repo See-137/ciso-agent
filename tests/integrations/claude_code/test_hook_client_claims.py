@@ -74,6 +74,7 @@ def test_client_uses_only_the_standard_library() -> None:
     tree = ast.parse(CLIENT_PATH.read_text(encoding="utf-8"))
     allowed = {
         "__future__",
+        "base64",
         "collections",
         "dataclasses",
         "getpass",
@@ -84,7 +85,9 @@ def test_client_uses_only_the_standard_library() -> None:
         "re",
         "socket",
         "ssl",
+        "subprocess",
         "sys",
+        "tempfile",
         "time",
         "typing",
         "urllib",

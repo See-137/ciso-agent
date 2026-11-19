@@ -121,13 +121,16 @@ CASES: list[tuple[str, set[C], set[C]]] = [
     # --- plain reads -----------------------------------------------------------------
     ("ls -la", {C.READ_ONLY_COMMAND}, {C.UNPARSEABLE}),
     ("git status", {C.READ_ONLY_COMMAND}, set()),
-    ("git log --oneline -5 && git diff HEAD", {C.READ_ONLY_COMMAND}, set()),
+    # A diff or text-conversion driver in repository config runs a program for these
+    # (review C4): never read-only.
+    ("git log --oneline -5 && git diff HEAD", set(), {C.READ_ONLY_COMMAND}),
     ("cat README.md | grep foo", {C.READ_ONLY_COMMAND}, set()),
     ("Get-ChildItem -Recurse src", {C.READ_ONLY_COMMAND}, set()),
     ("echo hi > out.txt", set(), {C.READ_ONLY_COMMAND}),
     ("ls 2>/dev/null", {C.READ_ONLY_COMMAND}, set()),
     ("pytest -q", set(), {C.READ_ONLY_COMMAND, C.UNPARSEABLE}),
-    ("find . -name '*.py'", {C.READ_ONLY_COMMAND}, set()),
+    # A glob in an argument is more than plain text: read-only is earned (review C1).
+    ("find . -name '*.py'", set(), {C.READ_ONLY_COMMAND, C.CREDENTIAL_ACCESS}),
     # cmd/PowerShell would read `$((` as a subexpression, so this is not read-only either.
     ("echo $(( 1 + 2 ))", set(), {C.UNPARSEABLE, C.READ_ONLY_COMMAND}),
     # --- git push family -------------------------------------------------------------
@@ -371,12 +374,12 @@ CASES: list[tuple[str, set[C], set[C]]] = [
     # --- git listing subcommands (coordinator finding 5) ------------------------------
     ("git stash", set(), {C.READ_ONLY_COMMAND}),
     ("git stash list", {C.READ_ONLY_COMMAND}, set()),
-    ("git stash show", {C.READ_ONLY_COMMAND}, set()),
+    ("git stash show", set(), {C.READ_ONLY_COMMAND}),  # prints a diff (review C4)
     ("git stash show -p --output=x", set(), {C.READ_ONLY_COMMAND}),
     ("git stash list --output=x", set(), {C.READ_ONLY_COMMAND}),
     ("git stash drop", set(), {C.READ_ONLY_COMMAND}),
     ("git tag", {C.READ_ONLY_COMMAND}, set()),
-    ("git tag -l 'v*'", {C.READ_ONLY_COMMAND}, set()),
+    ("git tag -l 'v*'", set(), {C.READ_ONLY_COMMAND}),  # a glob character (review C1)
     ("git tag -l v1 -f", set(), {C.READ_ONLY_COMMAND}),
     ("git tag v9", set(), {C.READ_ONLY_COMMAND}),
     ("git reflog", {C.READ_ONLY_COMMAND}, set()),
@@ -475,26 +478,30 @@ def test_unparseable_text_gives_only_unparseable() -> None:
 
 
 def test_one_failed_reading_never_yields_read_only() -> None:
-    """Coordinator finding 2: a here-document cannot be read as PowerShell/cmd, so even a
-    harmless one is not read-only; the same reader with no here-document is."""
+    """Coordinator finding 2 and review M3: a here-document cannot be read as
+    PowerShell/cmd, so even a harmless one is not read-only, and the failed reading makes
+    it unparseable; the same reader with no here-document is read-only."""
     heredoc = classify_command("cat <<'EOF'\nhello\nEOF", CFG)
     assert C.READ_ONLY_COMMAND not in heredoc.classes
-    assert C.UNPARSEABLE not in heredoc.classes
+    assert C.UNPARSEABLE in heredoc.classes
     assert classify_command("cat notes.txt", CFG).classes == {C.READ_ONLY_COMMAND}
 
 
 def test_quoted_heredoc_body_is_data() -> None:
     data = classify_command(t("cat > notes.md <<'EOF'\nrun <<RM>> <<RF>> build\nEOF"), CFG)
     assert C.DESTRUCTIVE_DELETE not in data.classes
-    assert C.UNPARSEABLE not in data.classes
+    assert data.classes == {C.UNPARSEABLE}  # the PowerShell/cmd reading fails (review M3)
 
 
-def test_push_branch_from_target_when_the_command_names_none() -> None:
+def test_push_that_names_no_branch_is_unknown_whatever_the_target_says() -> None:
+    """Review H5: the reported current branch is not where `push.default`, an upstream or
+    `remote.<name>.push` may send the push, so no destination means unknown."""
     feature = classify_command("git push", CFG, target_branch="feature/a")
     main = classify_command("git push", CFG, target_branch="main")
-    assert C.GIT_PUSH_PROTECTED_REF not in feature.classes
+    assert C.GIT_PUSH_PROTECTED_REF in feature.classes
     assert C.GIT_PUSH_PROTECTED_REF in main.classes
-    assert feature.branches == frozenset({"feature/a"})
+    assert feature.branches == frozenset()
+    assert feature.unknown_branch
 
 
 def test_branches_named_in_the_command_are_reported() -> None:

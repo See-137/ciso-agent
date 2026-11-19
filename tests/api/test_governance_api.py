@@ -23,7 +23,7 @@ from tests.api.helpers import ApiFactory
 
 from ciso.api import require, route_table, undeclared_routes
 from ciso.api.bodylimit import MAX_BODY_BYTES, MAX_GATE_BODY_BYTES
-from ciso.app.governance_pipeline import PUSH_HELD_NOTE
+from ciso.app.governance_pipeline import CHANGE_SCAN_NOTE, PLAIN_COMMAND_NOTE
 from ciso.common.enums import ActorType, Role
 from ciso.common.errors import FailClosed
 from ciso.identity import PERMISSIONS, ROLE_TEMPLATES
@@ -216,20 +216,53 @@ def test_an_unexpected_error_is_a_deny_not_a_500(
     assert (answer["verdict"], answer["reason"]) == ("deny", "internal_error")
 
 
-def test_a_push_is_held_until_the_sandbox_exists(world: World) -> None:
+def test_a_plain_push_without_its_change_asks_for_the_change(world: World) -> None:
     answer = world.decide(pre_tool(world, "Bash", {"command": "git push origin feature"}))
-    assert answer["verdict"] == "deny"
-    assert answer["message"].endswith(PUSH_HELD_NOTE)
+    assert (answer["verdict"], answer["reason"]) == ("deny", "inspection_incomplete")
+    codes = [
+        r.details["reason_codes"]
+        for r in world.api.audit_records("governance.decide")
+        if r.details["decision_id"] == answer["decision_id"]
+    ]
+    assert "needs_change" in answer, codes
+    assert answer["needs_change"] == {
+        "kind": "push",
+        "remote": "origin",
+        "branch": "feature",
+        "source": "feature",
+    }
+    assert answer["message"].endswith(CHANGE_SCAN_NOTE)
+
+
+def test_a_push_that_is_not_a_plain_command_is_refused_without_asking(world: World) -> None:
     wrapped = world.decide(
         pre_tool(world, "Bash", {"command": "cd sub && git push origin feature"})
     )
     assert wrapped["verdict"] == "deny"
-    assert wrapped["message"].endswith(PUSH_HELD_NOTE)
+    assert "needs_change" not in wrapped
+    assert wrapped["message"].endswith(PLAIN_COMMAND_NOTE)
+
+
+@pytest.mark.parametrize("command", ["git push", "git push origin", "git push origin HEAD"])
+def test_a_push_that_names_no_branch_is_refused_without_asking(world: World, command: str) -> None:
+    answer = world.decide(pre_tool(world, "Bash", {"command": command}))
+    assert answer["verdict"] == "deny"
+    assert "needs_change" not in answer
+    assert answer["message"].endswith(PLAIN_COMMAND_NOTE)
+    assert "git push <remote> <branch>" in answer["message"]
+
+
+def test_a_push_denied_for_another_reason_does_not_ask_for_the_change(world: World) -> None:
+    answer = world.decide(pre_tool(world, "Bash", {"command": "git push --force origin main"}))
+    assert (answer["verdict"], answer["reason"]) == ("deny", "rule_deny")
+    assert "needs_change" not in answer
 
 
 def test_a_read_is_not_held(world: World) -> None:
     answer = world.decide(pre_tool(world, "Bash", {"command": "git status"}))
-    assert PUSH_HELD_NOTE not in answer["message"]
+    assert PLAIN_COMMAND_NOTE not in answer["message"]
+    assert CHANGE_SCAN_NOTE not in answer["message"]
+    assert "needs_change" not in answer
 
 
 # --- activity -------------------------------------------------------------------------
@@ -356,8 +389,16 @@ def test_central_gate_unset_denies(make_api: ApiFactory) -> None:
     assert _gate(world, gate_frame("tool_call", "req_g6"))["action"] == "deny"
 
 
-def test_readiness_lists_what_governance_runs_without(world: World) -> None:
-    assert "governance.required_sandbox_checks" in world.api.container.readiness().governance
+def test_readiness_lists_what_governance_runs_without(make_api: ApiFactory) -> None:
+    def unset(settings: Any) -> Any:
+        gov = settings.governance.model_copy(
+            update={"required_sandbox_checks": None, "sandbox_url": None}
+        )
+        return settings.model_copy(update={"governance": gov})
+
+    listed = build_world(make_api, change=unset).api.container.readiness().governance
+    assert "governance.required_sandbox_checks" in listed
+    assert "governance.sandbox_url" in listed
 
 
 def test_device_registration_answers_once(world: World) -> None:

@@ -296,9 +296,11 @@ def _assemble(
     authenticator = build_authenticator(
         settings, engine=operational, clock=clock, audit=audit, identity=identity, scrypt=scrypt
     )
+    queue = build_queue(settings, operational, clock, audit, identity, metrics)
     governance = build_governance(
         settings, engine=operational, clock=clock, audit=audit, killswitch=gate.reader,
         identity=identity, authenticator=authenticator, redactor=redactor, secrets=store,
+        queue=queue,
     )  # fmt: skip
     warnings = startup_warnings(settings)
     inference = build_inference(
@@ -353,7 +355,7 @@ def _assemble(
             settings, catalog=catalog, clock=clock, audit=audit, principals=identity
         ),
         policy_context=DefaultPolicyContext(),
-        queue=build_queue(settings, operational, clock, audit, identity, metrics),
+        queue=queue,
         inference=inference,
         approvals=approvals,
         external_inference=external,

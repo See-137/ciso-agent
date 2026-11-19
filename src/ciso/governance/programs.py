@@ -123,7 +123,7 @@ PRINTERS = _w("echo printf print write-output write-host write echo.")
 
 #: Print the whole environment when run without a command.
 ENV_DUMPERS = _w("env printenv")
-ENV_DUMP_WORD_FRAGMENTS = ("getenvironmentvariables",)
+ENV_DUMP_WORD_FRAGMENTS = ("getenvironmentvariable", "environment::")
 SECRET_VARIABLE_RE = re.compile(
     r"(?i).*(token|secret|passw|pwd|api_?key|credential|private_?key|access_?key).*"
 )
@@ -233,4 +233,35 @@ SERVICE_CONTROLLERS = _w(
 SERVICE_STOP_VERBS = _w(
     "stop disable mask delete config unload remove bootout kill stop-service "
     "set-service remove-service suspend-service"
+)
+
+#: Script arguments that mean "read the code from standard input".
+STDIN_PATHS = _w("- /dev/stdin /dev/fd/0 /proc/self/fd/0")
+#: Change the directory later commands run in.
+DIRECTORY_CHANGERS = _w("cd chdir pushd popd set-location sl push-location pop-location")
+#: Copy or move a file to a new name (a fetched file keeps being "fetched").
+MOVERS = _w("mv cp move copy move-item mi copy-item cpi ren rename rename-item rni install ln")
+#: Programs whose positional arguments are files they create or overwrite.
+FILE_WRITERS = MOVERS | _w(
+    "tee dd xcopy robocopy set-content add-content ac out-file new-item ni touch"
+)
+#: Fragments of a word that build code at run time (PowerShell script blocks).
+COMPUTED_CODE_FRAGMENTS = (
+    "scriptblock]::create",
+    "newscriptblock",
+    ".invokescript(",
+    "[scriptblock]",
+)
+#: Run a script block, possibly on another machine.
+SCRIPT_BLOCK_RUNNERS = _w("invoke-command icm start-job sajb start-threadjob")
+#: Parameters of those that reach another machine.
+REMOTE_TARGET_PARAMETERS = _w("-computername -cn -session -hostname -uri -connectionuri -vmname")
+#: Variables that name a home directory (a path starting with one is under home).
+HOME_VARIABLES = _w("home userprofile env:userprofile env:home")
+#: PowerShell environment variables whose value is a location or a plain system fact.
+BENIGN_ENV_VARIABLES = _w(
+    "env:userprofile env:home env:homedrive env:homepath env:temp env:tmp env:appdata "
+    "env:localappdata env:programdata env:programfiles env:systemroot env:windir "
+    "env:systemdrive env:computername env:username env:path env:pwd env:os "
+    "env:processor_architecture env:number_of_processors env:public"
 )

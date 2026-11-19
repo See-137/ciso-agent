@@ -2,7 +2,18 @@
 
 Line by line, deterministic, no model. A finding names the rule and the line and column;
 it never carries the value. Obvious placeholders (`<token>`, `xxxx`, `changeme`, `${VAR}`,
-`os.environ[...]`, `secret://` references) are not reported.
+`$VAR` in one case, `os.environ[...]`, `env.X`, `your-password-here`, `secret://`
+references) are not reported; a value that merely STARTS like one (`my-<value>`,
+`env-<value>`, a mixed-case `$<value>`) is.
+
+Names (review M4, `ciso.inspection.secret_names`): any case and separator style, judged by
+their last word. Values: quoted, bare (in code files only a bare value that cannot be a
+name or a number), a YAML block scalar on the following more-indented line, and string
+pieces joined on one line.
+
+What a clean result means: `InspectionResult.complete` says every check RAN; it never
+says the content holds no secret. A line scanner cannot prove absence (a value split over
+lines, encoded or computed is not found); that is why the sandbox step exists.
 
 The shapes are generic: each names a token format, not a provider. They overlap the
 vault's redaction shapes (`ciso.vault.redact`) on purpose and are kept here because a
@@ -21,6 +32,12 @@ from typing import Final
 from ciso.common.activity import Severity
 from ciso.inspection._collect import Collector, location
 from ciso.inspection.rules import Rule
+from ciso.inspection.secret_names import (
+    indent_of,
+    is_block_indicator,
+    is_secret_name,
+    joined_strings,
+)
 
 #: A value shorter than this after a key-like name is not reported (quoted, bare).
 MIN_QUOTED_VALUE: Final = 4
@@ -99,7 +116,11 @@ _SHAPES: Final[tuple[_Shape, ...]] = (
     _Shape(
         CLOUD_ACCESS_KEY,
         re.compile(
-            r"(?<![A-Z0-9])(?:AKIA|ASIA|AGPA|AIDA|AROA|ANPA|ANVA|AIPA)[A-Z0-9]{16}(?![A-Z0-9])"
+            r"(?<![A-Za-z0-9])(?:"
+            r"(?:AKIA|ASIA|AGPA|AIDA|AROA|ANPA|ANVA|AIPA)[A-Z0-9]{16}"
+            # Lower-cased copies (review M4); a digit is required so words do not match.
+            r"|(?i:akia|asia|agpa|aida|aroa|anpa|anva|aipa)(?=[a-z0-9]{0,15}[0-9])[a-z0-9]{16}"
+            r")(?![A-Za-z0-9])"
         ),
     ),
     _Shape(
@@ -143,13 +164,10 @@ _SHAPES: Final[tuple[_Shape, ...]] = (
     ),
 )
 
-_KEY_WORDS = (
-    r"password|passwd|passphrase|secret|token|api[_-]?key|apikey|access[_-]?key"
-    r"|private[_-]?key|client[_-]?secret|credentials?"
-)
+#: A name followed by an assignment operator; `is_secret_name` decides whether it counts.
 _ASSIGNMENT = re.compile(
-    rf"(?i)(?<![A-Za-z0-9])(?P<key>[A-Za-z0-9_.-]{{0,64}}?(?:{_KEY_WORDS}))(?![A-Za-z0-9])"
-    r"[\"']?\s*(?:=>|:=|[:=])(?!=)\s*"
+    r"(?<![A-Za-z0-9_.-])(?P<key>[A-Za-z0-9_.-]{1,64})"
+    r"[\"']?\s*(?:=>|:=|[:=])(?!=)\s*\(?\s*"
     r"(?P<val>\$\{[^}\n]{0,256}\}|\"[^\"\n]{0,512}\"|'[^'\n]{0,512}'|`[^`\n]{0,512}`|[^\s,;'\"`)}\]]{1,512})"
 )
 _ENTROPY_CANDIDATE = re.compile(
@@ -163,11 +181,13 @@ _ENTROPY_KEY_EXEMPT = re.compile(
 
 _PLACEHOLDER_WHOLE = re.compile(
     r"(?i)<[^<>]{0,256}>"
-    r"|\$\{[^}]{0,256}\}|\$\(.{0,256}\)|\$[A-Za-z_][A-Za-z0-9_]{0,127}"
+    r"|\$\{[^}]{0,256}\}|\$\(.{0,256}\)"
+    r"|(?-i:\$[A-Z_][A-Z0-9_]{0,127}|\$[a-z_][a-z0-9_]{0,127})|\$env:[A-Za-z_]\w{0,127}"
     r"|\{\{.{0,256}\}\}|%\([^)]{0,64}\)s|%[A-Za-z_][A-Za-z0-9_]{0,63}%"
     r"|[x*.#_-]{3,512}"
-    r"|change[_-]?me|change[_-]?it|(?:your|my)[_-].{0,256}"
-    r"|(?:os\.environ|os\.getenv|getenv|process\.env|environ|env)\b.{0,256}"
+    r"|change[_-]?me|change[_-]?it"
+    r"|(?-i:(?:your|my)(?:[_-][a-z]+){1,8}|(?:YOUR|MY)(?:[_-][A-Z]+){1,8})"
+    r"|(?:os\.environ|os\.getenv|getenv|process\.env|environ|env)\s*[\[(.].{0,256}"
     r"|secret://.{0,256}"
     r"|none|null|nil|undefined|true|false|empty|redacted|\[redacted\]"
 )
@@ -184,6 +204,10 @@ _CODE_SUFFIXES: Final = frozenset(
     }
 )  # fmt: skip
 _CODE_REFERENCE = re.compile(r"[A-Za-z_][\w]*(?:\.[A-Za-z_]\w*)+|.*[(\[].*")
+#: A bare value in a code file that is a name or a number, not a literal secret.
+_CODE_NAME_OR_NUMBER = re.compile(
+    r"(?i)[A-Za-z_]\w*|0[xob][0-9a-f_]+|[0-9][0-9_]*(?:\.[0-9_]*)?(?:e[+-]?[0-9]+)?"
+)
 
 
 def is_placeholder(value: str) -> bool:
@@ -222,7 +246,9 @@ def _literal_value(raw: str, *, code_file: bool) -> str | None:
     if raw[:1] in {'"', "'", "`"}:
         inner = raw[1:-1]
         return inner if len(inner) >= MIN_QUOTED_VALUE else None
-    if code_file or len(raw) < MIN_BARE_VALUE or raw.isdigit():
+    if len(raw) < MIN_BARE_VALUE or raw.isdigit() or raw.startswith("!"):
+        return None  # `!` starts a YAML tag (`!vault`), not a value
+    if code_file and _CODE_NAME_OR_NUMBER.fullmatch(raw):
         return None
     if raw.lower() in _TYPE_NAMES or _CODE_REFERENCE.fullmatch(raw):
         return None
@@ -232,31 +258,108 @@ def _literal_value(raw: str, *, code_file: bool) -> str | None:
 def scan_secrets(lines: Iterable[tuple[int, str]], path: str, out: Collector) -> None:
     """Add a finding for each secret on the given (line number, text) pairs."""
     code_file = _is_code_path(path)
+    block = _Block()
     for number, text in lines:
         taken: list[tuple[int, int]] = []
-        for shape in _SHAPES:
-            for match in shape.pattern.finditer(text):
-                span = _value_span(match)
-                if is_placeholder(text[span[0] : span[1]]) or _overlaps(span, taken):
-                    continue
-                taken.append(span)
-                out.add(shape.rule, location(path, number, match.start() + 1))
+        block.value_line(number, text, path, taken, out)
+        _shapes(text, number, path, taken, out)
+        joined = joined_strings(text)
+        for run in joined:
+            _joined_shapes(run.value, (run.start, run.end), number, path, taken, out)
         for match in _ASSIGNMENT.finditer(text):
+            if not is_secret_name(match.group("key")):
+                continue
             span = match.span("val")
-            value = _literal_value(match.group("val"), code_file=code_file)
+            raw = match.group("val")
+            piece = next((r for r in joined if r.start == span[0]), None)
+            if piece is not None:
+                span, raw = (piece.start, piece.end), f'"{piece.value}"'
+            if is_block_indicator(raw):
+                block.expect(number, indent_of(text))
+                continue
+            value = _literal_value(raw, code_file=code_file)
             if value is None or is_placeholder(value) or _overlaps(span, taken):
                 continue
             taken.append(span)
             out.add(ASSIGNMENT, location(path, number, match.start() + 1))
-        for match in _ENTROPY_CANDIDATE.finditer(text):
-            span = match.span("val")
-            value = match.group("val")
-            if _overlaps(span, taken) or not _random_looking(value):
-                continue
-            if _ENTROPY_KEY_EXEMPT.fullmatch(match.group("key")) or is_placeholder(value):
+        _entropy(text, number, path, taken, out)
+
+
+def _shapes(
+    text: str, number: int, path: str, taken: list[tuple[int, int]], out: Collector
+) -> None:
+    for shape in _SHAPES:
+        for match in shape.pattern.finditer(text):
+            span = _value_span(match)
+            if is_placeholder(text[span[0] : span[1]]) or _overlaps(span, taken):
                 continue
             taken.append(span)
-            out.add(HIGH_ENTROPY, location(path, number, match.start() + 1))
+            out.add(shape.rule, location(path, number, match.start() + 1))
+
+
+def _joined_shapes(
+    value: str,
+    span: tuple[int, int],
+    number: int,
+    path: str,
+    taken: list[tuple[int, int]],
+    out: Collector,
+) -> None:
+    """Token shapes in a value joined from pieces; reported once, at the run's start."""
+    if _overlaps(span, taken):
+        return
+    for shape in _SHAPES:
+        for match in shape.pattern.finditer(value):
+            found = _value_span(match)
+            if not is_placeholder(value[found[0] : found[1]]):
+                taken.append(span)
+                out.add(shape.rule, location(path, number, span[0] + 1))
+                return
+
+
+def _entropy(
+    text: str, number: int, path: str, taken: list[tuple[int, int]], out: Collector
+) -> None:
+    for match in _ENTROPY_CANDIDATE.finditer(text):
+        span = match.span("val")
+        value = match.group("val")
+        if _overlaps(span, taken) or not _random_looking(value):
+            continue
+        if _ENTROPY_KEY_EXEMPT.fullmatch(match.group("key")) or is_placeholder(value):
+            continue
+        taken.append(span)
+        out.add(HIGH_ENTROPY, location(path, number, match.start() + 1))
+
+
+class _Block:
+    """A YAML block scalar (`password: |`): its value is the next non-blank line, when that
+    line directly follows (blank lines aside) and is indented deeper than the name."""
+
+    def __init__(self) -> None:
+        self._indent: int | None = None
+        self._last = 0
+
+    def expect(self, number: int, indent: int) -> None:
+        self._indent, self._last = indent, number
+
+    def value_line(
+        self, number: int, text: str, path: str, taken: list[tuple[int, int]], out: Collector
+    ) -> None:
+        key_indent = self._indent
+        if key_indent is None:
+            return
+        if number != self._last + 1:
+            self._indent = None
+            return
+        if not text.strip():
+            self._last = number
+            return
+        self._indent = None
+        indent, value = indent_of(text), text.strip()
+        if indent <= key_indent or len(value) < MIN_QUOTED_VALUE or is_placeholder(value):
+            return
+        taken.append((indent, len(text)))
+        out.add(ASSIGNMENT, location(path, number, indent + 1))
 
 
 def _random_looking(value: str) -> bool:

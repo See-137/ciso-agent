@@ -1,9 +1,9 @@
 {
   "schema_version": 1,
-  "version": "governance-default-2026.11.19-1",
-  "description": "PROVISIONAL default rules for observed AI-agent actions (docs/skill/spec-draft.md, S2). Every rule here is a starting point for the owner to confirm or change; none is an approved company policy. Built-in invariants (kill switch, disputed attribution, critical findings, agent configuration changes, security tool tampering, unparseable commands) apply before these rules and cannot be relaxed here. Assistant-specific instruction-file and settings paths are not named in this vendor-neutral file: add them to agent_config_paths in the deployment's ruleset.",
+  "version": "governance-default-2026.11.19-2",
+  "description": "PROVISIONAL default rules for observed AI-agent actions (docs/skill/spec-draft.md, S2). Every rule here is a starting point for the owner to confirm or change; none is an approved company policy. Built-in invariants (kill switch, disputed attribution, critical findings, agent configuration changes, security tool tampering) deny before these rules and cannot be relaxed here. An unparseable command is never allowed: where these rules would allow it the engine asks instead, and a deny these rules give it stays a deny. Assistant-specific instruction-file and settings paths are not named in this vendor-neutral file: add them to agent_config_paths in the deployment's ruleset.",
   "provisional": true,
-  "read_only_kinds": ["prompt", "file_read", "session_start", "session_end"],
+  "read_only_kinds": ["prompt", "file_read", "session_start", "session_end", "turn_end"],
   "defaults": {"read_only": "ask", "other": "ask"},
   "missing_inspection": "deny",
   "protected_branches": ["main", "master", "release/*", "prod*"],
@@ -12,10 +12,10 @@
   "rules": [
     {
       "id": "allow-reads-known-people",
-      "description": "Reads, prompts and session start/end are allowed when the session is tied to a person who resolves now in the identity store and the attribution is verified or declared. Credential reads are still denied by the credential rule below, which is stricter.",
+      "description": "Reads, prompts, session start/end and turn ends are allowed when the session is tied to a person who resolves now in the identity store and the attribution is verified or declared. Credential reads are still denied by the credential rule below, which is stricter.",
       "effect": "allow",
       "match": {
-        "kinds": ["prompt", "file_read", "session_start", "session_end"],
+        "kinds": ["prompt", "file_read", "session_start", "session_end", "turn_end"],
         "attribution_states": ["verified", "declared"],
         "person_known": true
       }

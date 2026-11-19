@@ -7,6 +7,10 @@
   (`ciso.app.governance_pipeline`). Never a 500 with details.
 - `POST /v1/activity`: device token only. 202 `{"recorded": true, "action_id"}`; a report
   that cannot be read, or a BEFORE event, is 422; a failed step is 503. Never blocks.
+- `POST /v1/changes`: device token only. The change a push or commit will send, for
+  its pre-push scan (`ciso.app.changes`). 201 `{"change_id", "created"}`; a malformed
+  upload is 422; a store that is not configured or a failed step is 503. Its body cap is
+  `ciso.app.change_models.MAX_CHANGE_BODY_BYTES` (`ciso.api.bodylimit`).
 - `POST /v1/central-gate`: no bearer token. The webhook signature authenticates the
   delivery (`ciso.app.governance_gate`); always 200 with the platform's verdict shape.
 
@@ -53,7 +57,14 @@ def register_governance_routes(router: FastAPI, container: Container) -> None:
         device: Annotated[Principal, Depends(DEVICE)], raw: Annotated[bytes, Depends(raw_body)]
     ) -> dict[str, Any]:
         answer = services.pipeline.decide(_parsed(raw), device_actor_id=device.actor_id)
-        return answer.model_dump(mode="json")
+        return answer.model_dump(mode="json", exclude_none=True)
+
+    @router.post("/v1/changes", status_code=201)
+    def changes(
+        device: Annotated[Principal, Depends(DEVICE)], raw: Annotated[bytes, Depends(raw_body)]
+    ) -> dict[str, Any]:
+        receipt = services.changes.submit(_parsed(raw), device_actor_id=device.actor_id)
+        return receipt.model_dump(mode="json")
 
     @router.post("/v1/activity", status_code=202)
     def activity(

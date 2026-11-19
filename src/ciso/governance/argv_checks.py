@@ -13,6 +13,7 @@ from typing import NamedTuple
 from ciso.governance import programs as p
 from ciso.governance.classes import CommandClass as C
 from ciso.governance.env_vars import assignment_classes, variable_classes
+from ciso.governance.lexer_types import DYN
 from ciso.governance.safe_options import is_read_only_invocation
 
 _SETID_SYMBOLIC = re.compile(r"[ugoa]*[+=][rwxXt]*s[rwxXt]*")
@@ -136,8 +137,25 @@ def _credential(name: str, args: list[str]) -> bool:
         name == "set" and not args,
         name in ("export", "declare", "typeset") and (not args or set(low) <= {"-p", "-x", "-px"}),
         any(a.lstrip("$").startswith("env:") for a in low),
+        name == "jq" and _jq_reads_environment(args),
     )
     return any(checks)
+
+
+_JQ_ENV_RE = re.compile(r"(?<![\w.])\$?env(?![\w])", re.IGNORECASE)
+_JQ_ARG_OPTIONS = frozenset({"--arg", "--argjson", "--args", "--jsonargs"})
+
+
+def _jq_reads_environment(args: list[str]) -> bool:
+    """`env`, `$ENV`, or a variable's value handed in with `--arg` (review H2)."""
+    if any(_JQ_ENV_RE.search(a) for a in args):
+        return True
+    return any(
+        DYN in value
+        for i, a in enumerate(args)
+        if a in _JQ_ARG_OPTIONS
+        for value in args[i + 1 : i + 3]
+    )
 
 
 def _decoder(name: str, args: list[str]) -> bool:

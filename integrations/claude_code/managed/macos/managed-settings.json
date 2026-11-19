@@ -59,9 +59,11 @@
     "AIGOV_SERVICE_URL": "https://REPLACE_ME_SERVICE_HOST",
     "AIGOV_DECIDE_TIMEOUT_SECONDS": "8",
     "AIGOV_REPORT_TIMEOUT_SECONDS": "1",
+    "AIGOV_HOOK_DEADLINE_SECONDS": "14",
     "AIGOV_SURFACE": "cli",
     "CLAUDE_CODE_SYNC_PLUGIN_INSTALL": "1",
-    "AIGOV_DEVICE_TOKEN_FILE": "/Library/Application Support/AIGovernance/device-token"
+    "AIGOV_DEVICE_TOKEN_FILE": "/Library/Application Support/AIGovernance/device-token",
+    "AIGOV_GIT_PATH": "/usr/bin/git"
   },
   "companyAnnouncements": [
     "AI activity in Claude Code on this machine is checked and recorded by the company AI-governance service. Refused actions show a decision id; quote it when you contact the security team."

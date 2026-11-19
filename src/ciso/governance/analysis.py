@@ -1,48 +1,36 @@
 """Walk a parsed command and collect its classes.
 
 Pipelines are where download-and-run hides: a stage that runs code read from its standard
-input (a shell or interpreter with no script, `iex`, `eval`) after a stage that fetched
-from the network is remote script execution; after a decoder, or after anything else,
-it is obfuscation (the code is built at run time). Code handed over in a string
-(`sh -c`, `cmd /c`, `powershell -Command`, `-EncodedCommand`, `eval`, `iex`) is read
-again, one level deeper. A file fetched and then run in the same line is remote script
-execution as well.
+input (a shell or interpreter with no script or with `/dev/stdin`, `iex`, `eval`, or one
+started by `xargs`) after a stage that fetched from the network is remote script
+execution; after a decoder, or after anything else, it is obfuscation (the code is built
+at run time). A file fetched, renamed and then run in the same line is remote script
+execution as well; so is code built at run time (a script block from text, a variable as
+the command) in a line that fetches.
+
+`read_only_command` is earned (review C1): every word is plain text
+(`ciso.governance.readonly_words`), every program is a known reader with only safe
+options, no wrapper, no assignment, no redirect except to a null device, and git only in
+the directory the command started in.
 """
 
 from __future__ import annotations
 
-import base64
-import binascii
 import re
-from typing import TYPE_CHECKING, NamedTuple
+from typing import TYPE_CHECKING
 
 from ciso.governance import programs as p
+from ciso.governance.analysis_code import CodeRunners, basename
+from ciso.governance.analysis_state import Seen
 from ciso.governance.argv_checks import check_program
 from ciso.governance.classes import CommandClass as C
-from ciso.governance.code_scan import scan_code
-from ciso.governance.danger_paths import (
-    GIT_CONFIG_PATHS,
-    GIT_HOOK_PATHS,
-    PRIVILEGE_PATHS,
-    TAMPER_PATHS,
-)
 from ciso.governance.env_vars import assignment_classes, variable_classes
 from ciso.governance.git_argv import check_git
-from ciso.governance.globs import path_matches_any
-from ciso.governance.safe_options import exec_option_values
-from ciso.governance.shell_lexer import (
-    DYN,
-    MAX_DEPTH,
-    Dialect,
-    HiddenCommand,
-    ParseError,
-    Redirect,
-    Script,
-    Stage,
-    Word,
-    parse_script,
-)
-from ciso.governance.wrappers import InterpreterParts, interpreter_parts, strip_wrapper
+from ciso.governance.lexer_types import DYN, MAX_DEPTH, Dialect, Redirect, Script, Stage, Word
+from ciso.governance.readonly_words import arithmetic_hazard, word_earns_read_only
+from ciso.governance.safe_options import SAFE, exec_option_values
+from ciso.governance.shell_lexer import HiddenCommand, ParseError, parse_script
+from ciso.governance.wrappers import Wrapped, interpreter_parts, strip_wrapper
 
 if TYPE_CHECKING:
     from ciso.governance.commands import ClassifierConfig
@@ -50,27 +38,10 @@ if TYPE_CHECKING:
 _ASSIGN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\+?=.*", re.DOTALL)
 _PS_ASSIGN_RE = re.compile(r"\$[A-Za-z_][\w:]*")
 _NULL_TARGETS = frozenset({"/dev/null", "nul", "$null", "null"})
-#: Longest decoded `-EncodedCommand` text read.
-MAX_DECODED_CHARS = 8000
-
-
-class Seen(NamedTuple):
-    network: bool = False
-    decoder: bool = False
-    stdin_exec: bool = False
-
-    def __or__(self, other: object) -> Seen:
-        if not isinstance(other, Seen):
-            return NotImplemented
-        return Seen(
-            self.network or other.network,
-            self.decoder or other.decoder,
-            self.stdin_exec or other.stdin_exec,
-        )
-
-
-def _basename(text: str) -> str:
-    return re.split(r"[\\/]", text)[-1].casefold()
+_CODE_RUNNERS = p.SHELLS | p.SCRIPT_INTERPRETERS | p.POWERSHELLS | p.EVALUATORS | {"cmd"}
+_GIT_MESSAGE_OPTIONS = frozenset({"-m", "--message"})
+#: A revision such as `HEAD~2` or `main^`: no separator, ends in `~N` or `^N`.
+_REVISION_RE = re.compile(r"[^/\\:]*[~^][0-9]*")
 
 
 def _find_exec(texts: list[str]) -> list[str]:
@@ -91,25 +62,40 @@ def _find_exec(texts: list[str]) -> list[str]:
     return [c for c in out if c]
 
 
-class Analyzer:
-    """One analysis of one parsed command. Holds mutable state; never shared."""
+def _git_path_texts(texts: list[str]) -> list[str]:
+    """git arguments that may be paths: everything except commit and tag messages and
+    revisions such as `HEAD~2` (which would otherwise read as a short name)."""
+    out: list[str] = []
+    skip = False
+    for text in texts:
+        if skip:
+            skip = False
+        elif text in _GIT_MESSAGE_OPTIONS:
+            skip = True
+        elif not text.startswith("--message=") and not _REVISION_RE.fullmatch(text):
+            out.append(text)
+    return out
 
-    def __init__(self, config: ClassifierConfig, target_branch: str | None) -> None:
-        self.cfg = config
-        self.target_branch = target_branch
-        self.classes: set[C] = set()
-        self.branches: set[str] = set()
-        self.downloaded: set[str] = set()
-        self.executed: set[str] = set()
-        self.read_only = True
-        self.depth = 0
+
+class Analyzer(CodeRunners):
+    """One analysis of one parsed command. Holds mutable state; never shared."""
 
     # --- structure --------------------------------------------------------------
 
     def script(self, script: Script) -> Seen:
+        outer = self.dialect
+        self.dialect = script.dialect
+        try:
+            return self._pipelines(script)
+        finally:
+            self.dialect = outer
+
+    def _pipelines(self, script: Script) -> Seen:
         seen = Seen()
         if "ifs" in script.flags:
             self.classes.add(C.OBFUSCATION)
+        if "arith" in script.flags:
+            self.read_only = False
         for pipeline in script.pipelines:
             infos = [self.stage(stage, index) for index, stage in enumerate(pipeline)]
             for j, info in enumerate(infos):
@@ -147,6 +133,8 @@ class Analyzer:
             if word.subs:
                 # A substitution runs a command to build an argument: never read-only.
                 self.read_only = False
+            if not word_earns_read_only(word, self.dialect):
+                self.read_only = False
             for sub in word.subs:
                 seen = seen | self.script(sub)
         for redirect in stage.redirects:
@@ -158,7 +146,7 @@ class Analyzer:
         if info.network:
             for redirect in stage.redirects:
                 if redirect.target is not None and redirect.op.startswith(">"):
-                    self.downloaded.add(_basename(redirect.target.text))
+                    self.downloaded.add(basename(redirect.target.text))
         return seen | info
 
     def redirect(self, redirect: Redirect) -> Seen:
@@ -172,39 +160,15 @@ class Analyzer:
         # `>` (`>&file`, `&>`, `&>>`, `>>&`, `>|`, `2>file`) writes to the target.
         duplicate = redirect.op in (">&", "<&") and (target.text.isdigit() or target.text == "-")
         writes = ">" in redirect.op and not duplicate
-        if writes and target.text.casefold() not in _NULL_TARGETS:
-            self.read_only = False
+        if not duplicate and not (writes and target.text.casefold() in _NULL_TARGETS):
+            self.read_only = False  # only a null device or a duplication stays read-only
         if not duplicate:
-            self.path(target.text, writes=writes)
+            self.environment_reads([target])
+            self.path_word(target, writes=writes, strict=True)
         if "/dev/tcp/" in target.text or "/dev/udp/" in target.text:
             self.classes.add(C.NETWORK_TRANSFER)
             seen = seen | Seen(network=True)
         return seen
-
-    # --- paths ------------------------------------------------------------------
-
-    def path(self, text: str, *, writes: bool) -> None:
-        if not text or len(text) > 1024:
-            return
-        candidates = {text}
-        if "=" in text:
-            candidates.add(text.partition("=")[2])
-        if ":" in text and not re.match(r"[A-Za-z]:[\\/]", text):
-            candidates.add(text.partition(":")[2])
-        for value in candidates:
-            if path_matches_any(self.cfg.all_credential_paths, value):
-                self.classes.add(C.CREDENTIAL_ACCESS)
-            if not writes:
-                continue
-            for patterns, cls in (
-                (self.cfg.all_agent_config_paths, C.AGENT_CONFIG_CHANGE),
-                (GIT_HOOK_PATHS, C.GIT_HOOKS_CHANGE),
-                (GIT_CONFIG_PATHS, C.GIT_CONFIG_CHANGE),
-                (PRIVILEGE_PATHS, C.PRIVILEGE_ESCALATION),
-                (TAMPER_PATHS, C.SECURITY_TOOL_TAMPER),
-            ):
-                if path_matches_any(patterns, value):
-                    self.classes.add(cls)
 
     # --- one simple command -----------------------------------------------------
 
@@ -212,13 +176,18 @@ class Analyzer:
         words = self.strip_assignments(words)
         if not words:
             return Seen()
+        self.environment_reads(words)
+        self.computed_code([w.text for w in words])
         first = words[0]
         if (first.text.startswith(".") and len(first.text) > 1 and stage.lead_group) or (
             first.text.startswith("[") and "]::" in first.text
         ):
             return self.expression(words)
         if first.dynamic:
-            self.classes.add(C.UNPARSEABLE)
+            # The command run is chosen at run time (`$cmd`, `& $block`): unreadable, and
+            # code built at run time (review H6).
+            self.classes |= {C.UNPARSEABLE, C.OBFUSCATION}
+            self.computed = True
             return self.expression(words)
         name = p.program_name(first.text)
         if not p.valid_program(name) or not p.valid_program_text(first.text):
@@ -226,7 +195,7 @@ class Analyzer:
             return self.expression(words)
         self.check_disguise(first, name)
         if "/" in first.text or "\\" in first.text:
-            self.executed.add(_basename(first.text))
+            self.executed.add(basename(first.text))
         return self.program(name, words[1:], stage, position)
 
     def strip_assignments(self, words: list[Word]) -> list[Word]:
@@ -268,22 +237,40 @@ class Analyzer:
         texts = [w.text for w in args]
         wrapped = strip_wrapper(name, texts)
         if wrapped is not None:
-            self.classes |= wrapped.classes
-            if wrapped.never_read_only:
-                self.read_only = False
-            if wrapped.read_only_stop:
-                return Seen()
-            for code, dialect in wrapped.code:
-                self.nested(code, dialect)
-            rest = args[len(args) - len(wrapped.rest) :] if wrapped.rest else []
-            if not wrapped.rest and wrapped.runs_command:
-                return Seen()
-            return self.argv(rest, stage, position) if rest else Seen()
+            return self.wrapper(name, wrapped, args, stage, position)
         interp = interpreter_parts(name, texts)
         if interp is not None:
             return self.interpreter(interp, args, stage, position)
+        if arithmetic_hazard(name, [w.raw for w in args]):
+            self.classes.add(C.UNPARSEABLE)  # bash may run code evaluating these (Q1)
+        if name in p.DIRECTORY_CHANGERS:
+            self.change_directory(name, args)
         if name == "git":
             return self.git(texts)
+        if name in p.SCRIPT_BLOCK_RUNNERS:
+            self.script_block_runner(args)
+        return self.plain_program(name, args, texts)
+
+    def wrapper(
+        self, name: str, wrapped: Wrapped, args: list[Word], stage: Stage, position: int
+    ) -> Seen:
+        self.classes |= wrapped.classes
+        if wrapped.read_only_stop:
+            return Seen()
+        if wrapped.never_read_only or name not in p.SHELL_KEYWORDS:
+            self.read_only = False  # a wrapper is not a reader
+        for code, dialect in wrapped.code:
+            self.nested(code, dialect)
+        rest = args[len(args) - len(wrapped.rest) :] if wrapped.rest else []
+        if not rest:
+            return Seen()
+        seen = self.argv(rest, stage, position)
+        if name == "xargs" and p.program_name(rest[0].text) in _CODE_RUNNERS:
+            # `xargs sh -c`: the code comes from the pipe (review H6).
+            seen = seen | Seen(stdin_exec=True)
+        return seen
+
+    def plain_program(self, name: str, args: list[Word], texts: list[str]) -> Seen:
         facts = check_program(name, texts)
         self.classes |= facts.classes
         if name == "find":
@@ -297,28 +284,40 @@ class Analyzer:
         for command in commands:
             self.nested(command, Dialect.POSIX)
         if facts.network:
-            self.downloaded |= {_basename(t) for t in texts if t and DYN not in t}
+            self.downloaded |= {basename(t) for t in texts if t and DYN not in t}
+        if name in p.MOVERS:
+            self.moved_file(texts)
         if name in p.SCRIPT_HOSTS:
             self.script_host(texts)
-        if name in p.PRINTERS and any(
-            p.SECRET_VARIABLE_RE.fullmatch(v) for w in args for v in w.variables
-        ):
-            self.classes.add(C.CREDENTIAL_ACCESS)
         if not facts.read_only:
             self.read_only = False
-        for text in texts:
-            self.path(text, writes=not facts.read_only)
+        if name not in p.PRINTERS:
+            # Operands the program opens as files; a directory change opens nothing.
+            opens = name in SAFE or name in p.FILE_WRITERS
+            strict = opens and name not in p.DIRECTORY_CHANGERS
+            for word in args:
+                self.path_word(word, writes=not facts.read_only, strict=strict)
         return Seen(facts.network, facts.decoder)
 
+    def moved_file(self, texts: list[str]) -> None:
+        """A fetched file copied or renamed is still a fetched file (review H6)."""
+        names = [t for t in texts if t and not t.startswith("-")]
+        if len(names) < 2 or not {basename(t) for t in names[:-1]} & self.downloaded:
+            return
+        target = basename(names[-1])
+        self.downloaded |= {target} if target else {basename(t) for t in names[:-1]}
+
     def git(self, texts: list[str]) -> Seen:
-        facts = check_git(texts, self.cfg.protected_branches, self.target_branch)
+        facts = check_git(texts, self.cfg.protected_branches)
         self.classes |= facts.classes
         self.branches |= facts.branches
-        if not facts.read_only:
+        self.unknown_branch = self.unknown_branch or facts.unknown_branch
+        if not facts.read_only or self.moved:
+            # Read-only git runs in the directory the command started in (review C4).
             self.read_only = False
         for code in facts.nested:
             self.nested(code, Dialect.POSIX)
-        for text in texts:
+        for text in _git_path_texts(texts):
             self.path(text, writes=not facts.read_only)
         return Seen()
 
@@ -327,105 +326,23 @@ class Analyzer:
             low = text.casefold()
             if "://" in low or low.startswith("\\\\") or "javascript:" in low:
                 self.classes |= {C.REMOTE_SCRIPT_EXECUTION, C.NETWORK_TRANSFER}
-            self.executed.add(_basename(text))
-
-    # --- code runners -----------------------------------------------------------
-
-    def interpreter(
-        self, interp: InterpreterParts, args: list[Word], stage: Stage, position: int
-    ) -> Seen:
-        self.read_only = False
-        self.classes |= interp.classes
-        if interp.redispatch is not None:
-            sub_name, start = interp.redispatch
-            return self.program(sub_name, args[start:], stage, position)
-        code_words = [args[i] for i in interp.code_indexes if i < len(args)]
-        computed = interp.evaluator and bool(stage.groups)
-        subs = tuple(sub for word in code_words for sub in word.subs)
-        self.code_sources(subs, stage.groups if computed else ())
-        if computed and any(
-            f in w.text.casefold() for w in code_words for f in p.NETWORK_WORD_FRAGMENTS
-        ):
-            self.classes.add(C.REMOTE_SCRIPT_EXECUTION)
-        if interp.encoded is not None:
-            self.encoded(interp.encoded)
-        code = " ".join(w.text for w in code_words)
-        if interp.extra_code:
-            code = f"{interp.extra_code} {code}".strip()
-        if code and not computed:
-            if interp.kind == "shell":
-                self.nested(code, interp.dialect)
-            else:
-                self.classes |= scan_code(code)
-                for token in re.split(r"[\s'\"(),;]+", code):
-                    self.path(token, writes=True)
-        if interp.script_index is not None:
-            word = args[interp.script_index]
-            self.executed.add(_basename(word.text))
-            if word.subs:
-                self.code_sources(word.subs, stage_groups=())
-        for redirect in stage.redirects:
-            self.fed_code(interp.kind, interp.dialect, redirect)
-        for text in [w.text for w in args]:
-            self.path(text, writes=False)
-        stdin = interp.reads_stdin and not code and not computed
-        return Seen(stdin_exec=stdin)
-
-    def code_sources(self, subs: tuple[Script, ...], stage_groups: tuple[Script, ...]) -> None:
-        """Code computed by substitutions: fetched => remote, otherwise obfuscation."""
-        if not subs and not stage_groups:
-            return
-        probe = Analyzer(self.cfg, self.target_branch)
-        seen = Seen()
-        for sub in (*subs, *stage_groups):
-            seen = seen | probe.script(sub)
-        if seen.network:
-            self.classes.add(C.REMOTE_SCRIPT_EXECUTION)
-        elif seen.decoder or stage_groups:
-            self.classes.add(C.OBFUSCATION)
-
-    def encoded(self, text: str) -> None:
-        self.classes.add(C.OBFUSCATION)
-        try:
-            raw = base64.b64decode(text, validate=True)
-            decoded = raw.decode("utf-16-le")
-        except (binascii.Error, ValueError):
-            self.classes.add(C.UNPARSEABLE)
-            return
-        if len(decoded) > MAX_DECODED_CHARS or not decoded.strip():
-            self.classes.add(C.UNPARSEABLE)
-            return
-        self.nested(decoded, Dialect.WINDOWS)
-
-    def fed_code(self, kind: str, dialect: Dialect, redirect: Redirect) -> None:
-        """Code given to an interpreter by a here-document, here-string or `<` file."""
-        target = redirect.target
-        if redirect.op == "<<" and redirect.body is not None:
-            if kind == "shell":
-                self.nested(redirect.body, dialect)
-            else:
-                self.classes |= scan_code(redirect.body)
-        elif redirect.op == "<<<" and target is not None:
-            self.code_sources(target.subs, ())
-            if kind == "shell":
-                self.nested(target.text, dialect)
-        elif redirect.op == "<" and target is not None:
-            self.executed.add(_basename(target.text))
+            self.executed.add(basename(text))
 
     # --- result ----------------------------------------------------------------
 
     def finish(self) -> tuple[set[C], set[str]]:
         if self.downloaded & self.executed - {""}:
             self.classes.add(C.REMOTE_SCRIPT_EXECUTION)
+        if self.computed and C.NETWORK_TRANSFER in self.classes:
+            self.classes.add(C.REMOTE_SCRIPT_EXECUTION)
         if self.read_only and not self.classes:
             self.classes.add(C.READ_ONLY_COMMAND)
         return self.classes, self.branches
 
 
-def analyze(
-    script: Script, config: ClassifierConfig, target_branch: str | None
-) -> tuple[set[C], set[str]]:
-    """Classes and push branches of one parsed reading of a command."""
-    analyzer = Analyzer(config, target_branch)
+def analyze(script: Script, config: ClassifierConfig) -> tuple[set[C], set[str], bool]:
+    """Classes, push branches, and whether a push names no branch, of one reading."""
+    analyzer = Analyzer(config)
     analyzer.script(script)
-    return analyzer.finish()
+    classes, branches = analyzer.finish()
+    return classes, branches, analyzer.unknown_branch

@@ -6,6 +6,12 @@ Who may act:
 - `suspend` only: also the agent's own `owner_ref` or `operator_ref` human. Stopping your
   own agent is always allowed; un-suspending is admin only.
 
+Device assignments (review H3, H4, M5): `assign_device` says which people use a device
+actor (the service actor a device token authenticates). Admin only, like every other
+change; the device actor and every person are resolved NOW (an active service actor, active
+humans) before the write, and a refusal is audited. A verified device vouches only for its
+assigned people (`ciso.agents.attribution`).
+
 Class rules, checked on the resulting record of every change: an `organizational` agent
 needs an owner, an `employee_operated` agent needs an operator. `approve` also refuses an
 agent of class `unknown`. Each refusal carries a `RefusalCode`.
@@ -13,8 +19,10 @@ agent of class `unknown`. Each refusal carries a `RefusalCode`.
 
 from __future__ import annotations
 
+import re
+from collections.abc import Sequence
 from datetime import datetime
-from typing import Any
+from typing import Any, Final
 
 from sqlalchemy import Connection, Engine, select
 
@@ -27,6 +35,7 @@ from ciso.agents.models import (
     AgentsNotFound,
     AgentsRefused,
     AgentStatus,
+    DeviceAssignment,
     IdentityBinding,
     RefusalCode,
     Registration,
@@ -34,11 +43,16 @@ from ciso.agents.models import (
 )
 from ciso.common.activity import PERSON_REF_KIND, AgentClass, IdentityClaim
 from ciso.common.clock import Clock
-from ciso.common.ids import new_id
+from ciso.common.enums import ActorType
+from ciso.common.errors import FailClosed, ValidationFailed
+from ciso.common.ids import EntityRef, new_id
 from ciso.common.protocols import AuditSink, PrincipalResolver
 
 _SUSPENDABLE = frozenset({AgentStatus.DECLARED, AgentStatus.OBSERVED, AgentStatus.APPROVED})
 _APPROVABLE = frozenset({AgentStatus.DECLARED, AgentStatus.OBSERVED})
+#: Most people one `assign_device` call names.
+MAX_ASSIGN_PEOPLE: Final = 16
+_ACTOR_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")
 
 
 def class_problem(agent: AgentRecord | Registration) -> RefusalCode | None:
@@ -66,6 +80,7 @@ class AgentAdmin:
         self, engine: Engine, clock: Clock, audit: AuditSink, principals: PrincipalResolver
     ) -> None:
         self._gate = AdminGate(engine, clock, audit, principals)
+        self._principals = principals
 
     # -- agents ----------------------------------------------------------------------
 
@@ -234,6 +249,100 @@ class AgentAdmin:
             by, "agents.binding.unbind", binding_id, {}, change
         )
         return result
+
+    # -- device assignments -----------------------------------------------------------
+
+    def assign_device(
+        self, by: Caller, device_actor: str, person_refs: Sequence[str]
+    ) -> tuple[DeviceAssignment, ...]:
+        """Assign the device actor to each person (`actor:<id>`), all or none.
+
+        Refused: a device actor that is not an active service actor
+        (`device_not_a_service_actor`), a person that is not an active human
+        (`person_not_an_active_human`), an active assignment of any pair
+        (`assignment_exists`). The API layer should also check the actor is a registered
+        device (`DeviceDirectory.is_device`); this package cannot read that table.
+        """
+        device, people = _assignment_targets(device_actor, person_refs)
+        ids = [new_id("dva") for _ in people]
+
+        def precheck() -> None:
+            self._check_targets(device, people)
+
+        def change(conn: Connection, now: datetime, acting: Acting) -> tuple[Any, dict[str, Any]]:
+            made = []
+            for assignment_id, person in zip(ids, people, strict=True):
+                if store.active_assignment_exists(conn, device, person):
+                    raise AgentsConflict(RefusalCode.ASSIGNMENT_EXISTS, device)
+                item = DeviceAssignment(
+                    id=assignment_id,
+                    device_actor=device,
+                    person_ref=person,
+                    assigned_at=now,
+                    assigned_by=acting.actor_id,
+                )
+                conn.execute(t.device_assignments.insert().values(**item.model_dump()))
+                made.append(item)
+            return tuple(made), {"assignments": ids}
+
+        details = {"device_actor": device, "people": list(people)}
+        result: tuple[DeviceAssignment, ...] = self._gate.run(
+            by, "agents.device.assign", device, details, change, precheck=precheck
+        )
+        return result
+
+    def unassign_device(self, by: Caller, assignment_id: str) -> DeviceAssignment:
+        """End one active assignment. Admin only."""
+
+        def change(conn: Connection, now: datetime, acting: Acting) -> tuple[Any, dict[str, Any]]:
+            a = t.device_assignments
+            row = conn.execute(select(a).where(a.c.id == assignment_id)).first()
+            if row is None or row.unassigned_at is not None:
+                raise AgentsNotFound(RefusalCode.ASSIGNMENT_NOT_FOUND, assignment_id)
+            conn.execute(
+                a.update()
+                .where(a.c.id == assignment_id)
+                .values(unassigned_at=now, unassigned_by=acting.actor_id)
+            )
+            item = store.assignment_from_row(row)
+            done = item.model_copy(update={"unassigned_at": now, "unassigned_by": acting.actor_id})
+            return done, {"device_actor": item.device_actor, "person_ref": item.person_ref}
+
+        result: DeviceAssignment = self._gate.run(
+            by, "agents.device.unassign", assignment_id, {}, change
+        )
+        return result
+
+    def _check_targets(self, device: str, people: Sequence[str]) -> None:
+        """Resolve the targets now. Runs after the ATTEMPT audit, outside any transaction."""
+        if _resolved_type(self._principals, device) is not ActorType.SERVICE:
+            raise AgentsRefused(RefusalCode.DEVICE_NOT_A_SERVICE, device)
+        for person in people:
+            actor_id = EntityRef.parse(person).id
+            if _resolved_type(self._principals, actor_id) is not ActorType.HUMAN:
+                raise AgentsRefused(RefusalCode.PERSON_NOT_HUMAN, person)
+
+
+def _assignment_targets(
+    device_actor: str, person_refs: Sequence[str]
+) -> tuple[str, tuple[str, ...]]:
+    if isinstance(person_refs, str) or not isinstance(device_actor, str):
+        raise ValidationFailed("assign_device takes a device actor id and a list of people")
+    if not _ACTOR_ID.fullmatch(device_actor):
+        raise ValidationFailed("a device actor id is 1-64 characters of [A-Za-z0-9_.-]")
+    people = tuple(check_person_ref(ref) for ref in person_refs)
+    if not people or len(people) > MAX_ASSIGN_PEOPLE or len(set(people)) != len(people):
+        raise ValidationFailed(f"name 1-{MAX_ASSIGN_PEOPLE} distinct people")
+    return device_actor, people
+
+
+def _resolved_type(principals: PrincipalResolver, actor_id: str) -> ActorType | None:
+    """The actor's type as the identity store sees it now; None when unknown."""
+    try:
+        principal = principals.resolve(actor_id)
+    except Exception as exc:
+        raise FailClosed("identity could not be consulted") from exc
+    return None if principal is None else principal.actor_type
 
 
 def _set_field(name: str, value: str | None) -> Any:

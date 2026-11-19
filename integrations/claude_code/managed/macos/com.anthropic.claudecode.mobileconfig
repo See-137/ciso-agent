@@ -42,6 +42,10 @@
 				<string>8</string>
 				<key>AIGOV_DEVICE_TOKEN_FILE</key>
 				<string>/Library/Application Support/AIGovernance/device-token</string>
+				<key>AIGOV_GIT_PATH</key>
+				<string>/usr/bin/git</string>
+				<key>AIGOV_HOOK_DEADLINE_SECONDS</key>
+				<string>14</string>
 				<key>AIGOV_REPORT_TIMEOUT_SECONDS</key>
 				<string>1</string>
 				<key>AIGOV_SERVICE_URL</key>

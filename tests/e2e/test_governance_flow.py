@@ -22,7 +22,7 @@ from tests.api.governance_helpers import (
 )
 from tests.api.helpers import ApiFactory
 
-from ciso.app.governance_pipeline import PUSH_HELD_NOTE
+from ciso.app.governance_pipeline import PLAIN_COMMAND_NOTE
 from ciso.app.governance_wiring import ALERTS_DIR
 from ciso.common.enums import Role
 
@@ -74,7 +74,8 @@ def test_the_funnel(world: World) -> None:
 
     push = world.decide(pre_tool(world, "Bash", {"command": "git push --force origin main"}))
     assert (push["verdict"], push["reason"]) == ("deny", "rule_deny")
-    assert push["message"].endswith(PUSH_HELD_NOTE)
+    assert push["message"].endswith(PLAIN_COMMAND_NOTE)
+    assert "needs_change" not in push
 
     mcp = world.decide(
         pre_tool(world, "Write", {"file_path": "C:\\work\\repo\\.mcp.json", "content": "{}"})

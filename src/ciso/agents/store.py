@@ -18,6 +18,7 @@ from ciso.agents.models import (
     AgentFact,
     AgentRecord,
     AgentsNotFound,
+    DeviceAssignment,
     IdentityBinding,
     RefusalCode,
     SeenClaim,
@@ -172,6 +173,40 @@ def active_bindings(
     return {(row.kind, row.subject): row.person_ref for row in conn.execute(query)}
 
 
+# -- device assignments -----------------------------------------------------------------
+
+
+def assignment_from_row(row: Row[Any]) -> DeviceAssignment:
+    return DeviceAssignment(
+        id=row.id,
+        device_actor=row.device_actor,
+        person_ref=row.person_ref,
+        assigned_at=row.assigned_at,
+        assigned_by=row.assigned_by,
+        unassigned_at=row.unassigned_at,
+        unassigned_by=row.unassigned_by,
+    )
+
+
+def assigned_people(conn: Connection, device_actor: str) -> frozenset[str]:
+    """People with an ACTIVE assignment to `device_actor`."""
+    if not device_actor:
+        return frozenset()
+    a = t.device_assignments
+    query = select(a.c.person_ref).where(a.c.device_actor == device_actor)
+    return frozenset(conn.execute(query.where(a.c.unassigned_at.is_(None))).scalars())
+
+
+def active_assignment_exists(conn: Connection, device_actor: str, person_ref: str) -> bool:
+    a = t.device_assignments
+    query = select(a.c.id).where(
+        a.c.device_actor == device_actor,
+        a.c.person_ref == person_ref,
+        a.c.unassigned_at.is_(None),
+    )
+    return conn.execute(query).first() is not None
+
+
 # -- sessions ---------------------------------------------------------------------------
 
 
@@ -197,6 +232,7 @@ def session_from_row(conn: Connection, row: Row[Any]) -> SessionRecord:
         first_seen=row.first_seen,
         last_seen=row.last_seen,
         device=row.device,
+        device_actor=row.device_actor,
         surface=row.surface,
         agent_ref=row.agent_ref,
         person_ref=row.person_ref,

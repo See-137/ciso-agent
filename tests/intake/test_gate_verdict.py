@@ -53,12 +53,14 @@ def test_allow_is_exactly_the_documented_body() -> None:
 
 
 def test_deny_carries_reason_and_reference() -> None:
-    body = render_verdict(decision(Verdict.DENY, explanation="Remove the API key and retry."))
+    made = decision(Verdict.DENY, explanation="Remove the API key and retry.")
+    body = render_verdict(made)
     assert body == {
         "action": "deny",
         "deny_reason": "Remove the API key and retry.",
-        "reference_id": "cg_" + "a" * 40,
+        "reference_id": made.decision_id,
     }
+    assert REFERENCE_RE.fullmatch(body["reference_id"])
 
 
 def test_ask_becomes_deny_because_the_gate_cannot_ask() -> None:
@@ -79,11 +81,10 @@ def test_deny_reason_is_cut_to_the_documented_limit() -> None:
     assert len(body["deny_reason"]) == 500
 
 
-def test_reference_id_is_dropped_when_it_breaks_the_documented_pattern() -> None:
-    body = render_verdict(decision(Verdict.DENY, action_id="hk_" + "b" * 60))
-    assert "reference_id" not in body
-    body = render_verdict(decision(Verdict.DENY, action_id="has space"))
-    assert "reference_id" not in body
+def test_reference_id_does_not_depend_on_the_action_id_shape() -> None:
+    for action_id in ("hk_" + "b" * 60, "has space"):
+        made = decision(Verdict.DENY, action_id=action_id)
+        assert render_verdict(made)["reference_id"] == made.decision_id
 
 
 def test_frame_verdict_allows_only_when_every_decision_allows() -> None:
@@ -92,7 +93,7 @@ def test_frame_verdict_allows_only_when_every_decision_allows() -> None:
     assert render_frame_verdict([allow, allow]) == {"action": "allow"}
     body = render_frame_verdict([allow, deny])
     assert body["action"] == "deny"
-    assert body["reference_id"] == "cg_" + "c" * 40
+    assert body["reference_id"] == deny.decision_id
 
 
 def test_frame_verdict_without_decisions_denies() -> None:

@@ -7,12 +7,14 @@ NOW comes through an injected `PrincipalResolver`.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from enum import StrEnum
-from typing import Annotated
+from types import MappingProxyType
+from typing import Annotated, Final
 
 from pydantic import Field, field_validator, model_validator
 
-from ciso.common.activity import PERSON_REF_KIND, AgentClass, Text, clean_text
+from ciso.common.activity import PERSON_REF_KIND, ActivitySource, AgentClass, Text, clean_text
 from ciso.common.enums import InformationState
 from ciso.common.errors import AuthorizationError, Conflict, NotFound, ValidationFailed
 from ciso.common.ids import EntityRef
@@ -35,6 +37,22 @@ DEVICE_FACT = "device"
 #: Target key of an `ObservedAction` that carries the reporting device's name. The shared
 #: contract has no device field yet (contract change requested).
 DEVICE_TARGET_KEY = "device"
+#: Claim kind the hook intake derives from the device token: the authenticated machine.
+DEVICE_ACTOR_CLAIM = "device_actor"
+#: The only claims whose `verified` flag the registry believes, and the one source each
+#: may come from: the device actor from a hook report (the API authenticated its token),
+#: the assistant account from the signed central gate. Any other claim marked verified is
+#: stored and judged as unverified (review M5): a client never vouches for itself.
+ISSUER_VERIFIED: Final[Mapping[str, ActivitySource]] = MappingProxyType(
+    {
+        DEVICE_ACTOR_CLAIM: ActivitySource.HOOK,
+        "assistant_account": ActivitySource.CENTRAL_GATE,
+        "assistant_email": ActivitySource.CENTRAL_GATE,
+    }
+)
+#: Person claims a verified device actor may vouch for: the claim's person must be
+#: assigned to that device (`DeviceAssignment`) for the session to be `verified`.
+DEVICE_VOUCHED_KINDS: Final = frozenset({"os_account"})
 
 _KIND = r"[a-z][a-z0-9_]{0,31}"
 _SURFACE = r"[a-z0-9][a-z0-9_.-]{0,31}"
@@ -63,6 +81,10 @@ class RefusalCode(StrEnum):
     OPERATOR_REQUIRED = "operator_required"
     CLASS_UNKNOWN = "class_unknown"
     BINDING_EXISTS = "binding_exists"
+    DEVICE_NOT_A_SERVICE = "device_not_a_service_actor"
+    PERSON_NOT_HUMAN = "person_not_an_active_human"
+    ASSIGNMENT_EXISTS = "assignment_exists"
+    ASSIGNMENT_NOT_FOUND = "assignment_not_found"
 
 
 class AttributionReason(StrEnum):
@@ -78,6 +100,12 @@ class AttributionReason(StrEnum):
     AGENT_RETIRED = "agent_retired"
     OPERATOR_MISMATCH = "operator_mismatch"
     SESSION_DEVICE_CHANGED = "session_device_changed"
+    #: The session belongs to another device actor (or the report has none): nothing of
+    #: the session's attribution is inherited (review H4).
+    SESSION_DEVICE_MISMATCH = "session_device_mismatch"
+    #: A bound person claim came from a verified device that is not assigned to that
+    #: person, so it stays `declared`.
+    PERSON_NOT_ON_DEVICE = "person_not_assigned_to_device"
 
 
 class _Coded(Exception):
@@ -170,6 +198,19 @@ class IdentityBinding(Model):
     unbound_by: str | None = None
 
 
+class DeviceAssignment(Model):
+    """`person_ref` uses the device actor `device_actor`. Active while `unassigned_at` is
+    None. A verified device vouches only for the people assigned to it."""
+
+    id: str
+    device_actor: Annotated[Text, Field(min_length=1, max_length=64)]
+    person_ref: PersonRef
+    assigned_at: UtcDatetime
+    assigned_by: str
+    unassigned_at: UtcDatetime | None = None
+    unassigned_by: str | None = None
+
+
 class SeenClaim(Model):
     kind: Kind
     subject: Text
@@ -182,6 +223,8 @@ class SessionRecord(Model):
     first_seen: UtcDatetime
     last_seen: UtcDatetime
     device: Text
+    #: The device actor that first reported the session ("" until one did).
+    device_actor: Text = ""
     surface: Text
     agent_ref: Text | None = None
     person_ref: Text | None = None

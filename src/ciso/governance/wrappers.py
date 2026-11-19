@@ -297,7 +297,7 @@ def _posix_shell(args: list[str]) -> InterpreterParts:
         break
     if wants_code:
         return InterpreterParts("shell", Dialect.POSIX, (i,) if i < len(args) else ())
-    if i < len(args) and not stdin:
+    if i < len(args) and not stdin and args[i] not in p.STDIN_PATHS:
         return InterpreterParts("shell", Dialect.POSIX, script_index=i)
     return InterpreterParts("shell", Dialect.POSIX, reads_stdin=True)
 
@@ -333,7 +333,8 @@ def _script(name: str, args: list[str]) -> InterpreterParts:
             )
         if arg in _CODE_FLAGS and not (name == "php" and arg != "-r") and i + 1 < len(args):
             return InterpreterParts("script", Dialect.POSIX, (i + 1,))
-        if arg == "-":
+        if arg in p.STDIN_PATHS:
+            # `/dev/stdin` and friends: the code comes from the pipe (review H6).
             return InterpreterParts("script", Dialect.POSIX, reads_stdin=True)
         if arg in _VALUE_FLAGS or (name in ("ruby", "node") and arg == "-r"):
             i += 2

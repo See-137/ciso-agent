@@ -14,9 +14,9 @@ from tests.agents.conftest import (
 )
 from tests.fakes.core import FakeAudit
 
-from ciso.agents import AgentAdmin, AgentRecord, AgentRegistry, AgentStatus
+from ciso.agents import AgentAdmin, AgentFact, AgentRecord, AgentRegistry, AgentStatus, Registration
 from ciso.agents import tables as t
-from ciso.common.activity import AgentClass, AttributionResolver
+from ciso.common.activity import ActivitySource, AgentClass, AttributionResolver
 from ciso.common.clock import FixedClock
 from ciso.common.enums import InformationState
 from ciso.common.errors import FailClosed
@@ -26,6 +26,8 @@ pytestmark = pytest.mark.unit
 OS = ("os_account", "CORP\\alice")
 ACCOUNT = ("assistant_account", "alice@corp.example")
 BOB_OS = ("os_account", "CORP\\bob")
+#: Only the signed central gate vouches for an assistant account (review M5).
+GATE = ActivitySource.CENTRAL_GATE
 
 
 @pytest.fixture
@@ -46,7 +48,7 @@ def test_registry_is_an_attribution_resolver(registry: AgentRegistry) -> None:
 def test_verified_bound_claim_gives_verified_person(
     registry: AgentRegistry, make_action: ActionFactory
 ) -> None:
-    result = registry.attribute(make_action(claims=((*ACCOUNT, True),)))
+    result = registry.attribute(make_action(claims=((*ACCOUNT, True),), source=GATE))
     assert result.person_ref == ALICE_REF
     assert result.state is InformationState.VERIFIED
 
@@ -74,7 +76,7 @@ def test_claims_naming_different_people_in_one_action_are_disputed(
 def test_conflict_with_an_earlier_claim_in_the_session_is_disputed(
     registry: AgentRegistry, make_action: ActionFactory
 ) -> None:
-    first = registry.attribute(make_action(claims=((*ACCOUNT, True),)))
+    first = registry.attribute(make_action(claims=((*ACCOUNT, True),), source=GATE))
     assert first.state is InformationState.VERIFIED
     later = registry.attribute(make_action(claims=((*BOB_OS, False),)))
     assert later.person_ref is None
@@ -89,7 +91,7 @@ def test_conflict_with_an_earlier_claim_in_the_session_is_disputed(
 def test_earlier_verified_claim_still_counts_for_the_session(
     registry: AgentRegistry, make_action: ActionFactory
 ) -> None:
-    registry.attribute(make_action(claims=((*ACCOUNT, True),)))
+    registry.attribute(make_action(claims=((*ACCOUNT, True),), source=GATE))
     later = registry.attribute(make_action(claims=((*OS, False),)))
     assert later.state is InformationState.VERIFIED
 
@@ -135,7 +137,7 @@ def test_claims_seen_are_kept_not_overwritten(
     registry.attribute(make_action(claims=((*OS, False),)))
     first_seen = clock.now()
     clock.advance(minutes=5)
-    registry.attribute(make_action(claims=((*OS, False), (*ACCOUNT, True))))
+    registry.attribute(make_action(claims=((*OS, False), (*ACCOUNT, True)), source=GATE))
     registry.attribute(make_action(claims=()))
     session = registry.get_session("sess-1")
     seen = {(c.kind, c.subject, c.verified): c.first_seen for c in session.claims}
@@ -153,7 +155,7 @@ def test_claims_seen_are_kept_not_overwritten(
 def test_registered_agent_matches_by_device_and_surface(
     registry: AgentRegistry, approved_agent: AgentRecord, make_action: ActionFactory
 ) -> None:
-    result = registry.attribute(make_action(claims=((*ACCOUNT, True),)))
+    result = registry.attribute(make_action(claims=((*ACCOUNT, True),), source=GATE))
     assert result.agent_ref == f"agent:{approved_agent.id}"
     assert result.agent_class is AgentClass.EMPLOYEE_OPERATED
     assert result.state is InformationState.VERIFIED
@@ -249,13 +251,39 @@ def test_organizational_agent_has_no_operator_rule(
     registry: AgentRegistry, admin_ops: AgentAdmin, make_action: ActionFactory
 ) -> None:
     org = admin_ops.register_agent(
-        ADMIN, registration(AgentClass.ORGANIZATIONAL, owner=ALICE_REF, operator=None)
+        ADMIN,
+        registration(
+            AgentClass.ORGANIZATIONAL,
+            owner=ALICE_REF,
+            operator=None,
+            extra=(AgentFact(kind="device_actor", value="svc_build"),),
+        ),
     )
     admin_ops.approve(ADMIN, org.id)
-    result = registry.attribute(make_action(claims=(("os_account", "CORP\\bob", True),)))
+    # The device name fact is a client claim: an organizational agent needs every fact
+    # verified, so it is matched only once the device name is dropped from its facts.
+    named = registry.attribute(
+        make_action(session="n", claims=((*BOB_OS, False),), device_actor="svc_build")
+    )
+    assert named.agent_class is not AgentClass.ORGANIZATIONAL
+    bot = admin_ops.register_agent(
+        ADMIN,
+        Registration(
+            display_name="Release bot",
+            agent_class=AgentClass.ORGANIZATIONAL,
+            surface="cli",
+            facts=(AgentFact(kind="device_actor", value="svc_build"),),
+            owner_ref=ALICE_REF,
+        ),
+    )
+    admin_ops.approve(ADMIN, bot.id)
+    result = registry.attribute(make_action(claims=((*BOB_OS, False),), device_actor="svc_build"))
+    assert result.agent_ref == bot.ref
     assert result.agent_class is AgentClass.ORGANIZATIONAL
-    assert result.state is InformationState.VERIFIED
-    assert result.reasons == ()
+    assert result.person_ref == BOB_REF
+    # No operator rule; Bob is not assigned to the build device, so he stays declared.
+    assert result.state is InformationState.DECLARED
+    assert result.reasons == ("person_not_assigned_to_device",)
 
 
 def test_declared_agent_is_flagged_not_approved(
