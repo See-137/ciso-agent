@@ -21,11 +21,12 @@ For both it answers: who is using AI, which system or agent, what it is doing, w
 actions it takes, whether the user and the agent are authorized, whether the code, action
 or behaviour is a security risk, and what mitigation or intervention is required.
 
-## 2. Environment, as stated by the owner
+## 2. Target environment (assumed)
 
-- Claude Enterprise plan.
-- Machines are domain-joined (to be confirmed by IT).
-- Operating systems: unknown, so Windows, macOS and Linux are all in scope.
+- An organization on a Claude plan with managed settings (the Enterprise plan adds the
+  central gate).
+- Centrally managed (for example domain-joined) machines.
+- Windows, macOS and Linux all in scope.
 
 ## 3. Components
 

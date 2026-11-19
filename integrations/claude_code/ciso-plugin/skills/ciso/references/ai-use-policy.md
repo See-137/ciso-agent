@@ -1,7 +1,7 @@
 # AI-use guidance (PROVISIONAL: the security team must confirm or replace each line)
 
-This is the default guidance the CISO skill gives. It is a starting point written for a
-startup on a company Claude plan; it is not an approved company policy until the security
+This is the default guidance the CISO skill gives. It is a starting point written for an
+organization on a company Claude plan; it is not an approved company policy until the security
 lead says so. Where it says "the security team", use the contact your organization set.
 
 ## What data may go to which AI tool

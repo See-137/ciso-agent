@@ -1,17 +1,16 @@
 # CISO agent for a Claude organization
 
-A Claude Code plugin that acts as a startup's CISO agent: a CISO skill plus local hooks
-that decide every agent action with fixed rules before it runs, no servers
+A Claude Code plugin that acts as an organization's CISO agent: a CISO skill plus local
+hooks that decide every agent action with fixed rules before it runs, no servers
 (`integrations/claude_code/ciso-plugin/`). It reuses the governance engine in `src/ciso`.
 An optional central server and sandbox add-on is in `src/ciso/app`, `src/ciso/api` and
-`services/sandbox` and is not finished. Nothing deployed; the code is in the private repository
-https://github.com/<account>/ciso-agent (pushed 2026-11-19 at the owner's go).
+`services/sandbox` and is not finished. Nothing is deployed.
 
 ## Start here
 
 1. `docs/plan/handover.md`: where the build stopped and what is open. Check its claims
    against the tree.
-2. `docs/HANDOVER-CISO-AGENT.md`: the deliverable, for an organization installing it.
+2. `docs/HANDOVER-CISO-AGENT.md`: the handover for an organization installing it.
 3. `integrations/claude_code/ciso-plugin/README.md`: the plugin's full reference.
 4. `docs/skill/spec-draft.md` (scope and rules that do not change),
    `docs/skill/review-queue.md` (findings queue; its status note lists what is open),

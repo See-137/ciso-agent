@@ -4,10 +4,8 @@ Read this first, then check it against the tree.
 
 ## What the product is now
 
-This is a CISO agent for an organization on a Claude plan. On
-2026-11-19 the request was for "just a skill we can add to our Claude organization to act
-as a CISO agent", and the owner chose option A: one Claude Code plugin (a CISO skill plus
-local enforcing hooks), no servers. The deliverable and its handover:
+A CISO agent an organization adds to its Claude environment: one Claude Code plugin (a
+CISO skill plus local enforcing hooks), no servers. The deliverable and its handover:
 
 - `docs/HANDOVER-CISO-AGENT.md` (what it is, how an org installs it, limits).
 - `integrations/claude_code/ciso-plugin/` (the plugin; its README is the full reference),
@@ -24,9 +22,8 @@ plus `ciso.app.change_shape` and `change_decide` (see `lib/BUNDLE.json`).
 
 ## State
 
-- Branch `build/baseline-platform`, pushed on 2026-11-19 at the owner's go to the private
-  repository https://github.com/<account>/ciso-agent as `main` (the add-on branch below is
-  pushed too). Product state is commit
+- Branch `build/baseline-platform`, published as `main` (the add-on branch below is
+  published too). Product state is commit
   `dcb16c9` plus the documentation commits after it. A second branch, `wip/service-review-fixes` (`cbadf11`), holds half-done,
   untested fixes for the server add-on's review; it is not merged.
 - Gate on 2026-11-19: the first fresh clone (of 3d5f93e) failed the plugin bundle check on
@@ -38,9 +35,8 @@ plus `ciso.app.change_shape` and `change_decide` (see `lib/BUNDLE.json`).
 - Real runs on this machine (Claude Code 2.1.316, model haiku, `--plugin-dir`, uv offline)
   are tabled in the plugin README and the handover, including re-runs on the final
   plugin. The managed marketplace install path was never run.
-- Docker Desktop is installed here; on 2026-11-19 the owner allowed it and six base images
-  were pulled for the sandbox add-on, but the derived images were not built and the
-  sandbox was never run in a real container.
+- The sandbox add-on's images were never built and the sandbox was never run in a real
+  container.
 
 ## Open, if the owner asks for more
 
