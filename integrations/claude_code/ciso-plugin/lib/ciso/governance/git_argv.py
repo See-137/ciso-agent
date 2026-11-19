@@ -231,11 +231,12 @@ def _push_args(args: list[str]) -> _PushArgs:
             if option is None:
                 bad = True
                 continue
+            if option.negated:
+                # `--no-<option>` never takes a value: the next word is a remote or refspec.
+                continue
             value = option.value
             if value is None and PUSH_LONG_OPTIONS[option.name] == "required" and i < len(args):
                 value, i = args[i], i + 1
-            if option.negated:
-                continue
             out.long.add(option.name)
             if option.name in _PUSH_PROGRAM_OPTIONS:
                 bad = True

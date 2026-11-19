@@ -137,3 +137,14 @@ def test_a_dot_credentials_json_file_is_a_credential(path: str) -> None:
     assert C.CREDENTIAL_ACCESS in action_analysis(action, CFG).classes
     plain = make_action(ActionKind.FILE_READ, command=None, target={"path": "/home/u/app.json"})
     assert C.CREDENTIAL_ACCESS not in action_analysis(plain, CFG).classes
+
+
+def test_a_negated_option_takes_no_value() -> None:
+    """`--no-<option>` never takes a value in git, so the next word stays a remote or a
+    refspec. Swallowing it as a value shifted the remote and refspec (review of 3d5f93e):
+    `git push --no-repo origin main` pushes `main` to `origin`, a protected push."""
+    found = classes("git push --no-repo origin main")
+    assert C.GIT_PUSH_PROTECTED_REF in found, sorted(found)
+    found = classes("git push --no-recurse-submodules origin main")
+    assert C.GIT_PUSH_PROTECTED_REF in found, sorted(found)
+    assert classes("git push --no-push-option origin feature") == {C.GIT_PUSH}
