@@ -24,7 +24,9 @@ plus `ciso.app.change_shape` and `change_decide` (see `lib/BUNDLE.json`).
 
 ## State
 
-- Branch `build/baseline-platform`, no remote, nothing pushed. Product state is commit
+- Branch `build/baseline-platform`, pushed on 2026-11-19 at the owner's go to the private
+  repository https://github.com/<account>/ciso-agent as `main` (the add-on branch below is
+  pushed too). Product state is commit
   `dcb16c9` plus the documentation commits after it. A second branch, `wip/service-review-fixes` (`cbadf11`), holds half-done,
   untested fixes for the server add-on's review; it is not merged.
 - Gate on 2026-11-19: the first fresh clone (of 3d5f93e) failed the plugin bundle check on
@@ -52,8 +54,8 @@ plus `ciso.app.change_shape` and `change_decide` (see `lib/BUNDLE.json`).
   `branch --forc`, `config`).
 - Server add-on: finish `wip/service-review-fixes` against
   `docs/reviews/skill-service-adversarial.md`, then a real sandbox run.
-- Pushing to a private GitHub repository is the owner's call; nothing is pushed until the
-  owner says go.
+- Before any further push: re-run the history secret scan (gitleaks in a container, all
+  branches) and keep the repository private.
 
 ## Things a new session must know
 

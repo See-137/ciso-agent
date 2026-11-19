@@ -4,7 +4,8 @@ A Claude Code plugin that acts as a startup's CISO agent: a CISO skill plus loca
 that decide every agent action with fixed rules before it runs, no servers
 (`integrations/claude_code/ciso-plugin/`). It reuses the governance engine in `src/ciso`.
 An optional central server and sandbox add-on is in `src/ciso/app`, `src/ciso/api` and
-`services/sandbox` and is not finished. Local build only: nothing deployed or pushed.
+`services/sandbox` and is not finished. Nothing deployed; the code is in the private repository
+https://github.com/<account>/ciso-agent (pushed 2026-11-19 at the owner's go).
 
 ## Start here
 
