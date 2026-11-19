@@ -24,11 +24,11 @@ plus `ciso.app.change_shape` and `change_decide` (see `lib/BUNDLE.json`).
 
 - Branch `build/baseline-platform`, published as `main` (the add-on branch below is
   published too). Product state is commit
-  `dcb16c9` plus the documentation commits after it. A second branch, `wip/service-review-fixes` (`cbadf11`), holds half-done,
+  `06b17e6` plus the documentation commits after it. A second branch, `wip/service-review-fixes` (`b47acf7`), holds half-done,
   untested fixes for the server add-on's review; it is not merged.
-- Gate on 2026-11-19: the first fresh clone (of 3d5f93e) failed the plugin bundle check on
-  Windows line endings; `.gitattributes` was fixed (dcb16c9) and a second fresh clone of
-  dcb16c9 passed: 5,563 passed, 14 skipped, 2 xfailed; mypy and ruff clean; `tools/build_ciso_plugin.py --check` and
+- Gate on 2026-11-19: the first fresh clone (of 8b0cc8a) failed the plugin bundle check on
+  Windows line endings; `.gitattributes` was fixed (06b17e6) and a second fresh clone of
+  06b17e6 passed: 5,563 passed, 14 skipped, 2 xfailed; mypy and ruff clean; `tools/build_ciso_plugin.py --check` and
   `config/derive_governance_ruleset.py --check` current; disabled-guard search empty; four
   hand mutations (plugin `onFailure`, plugin stop flag, engine agent-config deny, the
   credential-path rule) each turned tests red and were restored.
