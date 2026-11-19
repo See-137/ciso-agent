@@ -37,6 +37,7 @@ def test_clean_write_is_complete_and_lists_every_check() -> None:
         "inspection.paths",
         "inspection.secrets",
         "inspection.code_risk",
+        "inspection.scan_suppression",
     )
 
 

@@ -435,6 +435,13 @@ CASES: list[tuple[str, set[C], set[C]]] = [
     ("export PATH=/tmp:$PATH", {C.ENVIRONMENT_HIJACK}, {C.READ_ONLY_COMMAND}),
     ("setx PATH C:\\tmp", {C.ENVIRONMENT_HIJACK}, set()),
     ("$env:path = 'C:\\tmp'", {C.ENVIRONMENT_HIJACK}, set()),
+    # --- bulk writes into broad places (queue Q15) ---------------------------------------
+    ("cp -r vendor/pkg .", {C.BULK_WRITE}, {C.READ_ONLY_COMMAND}),
+    ("tar -xzf a.tgz", {C.BULK_WRITE}, set()),
+    ("unzip a.zip -d ..", {C.BULK_WRITE}, set()),
+    ("Expand-Archive a.zip -DestinationPath $HOME", {C.BULK_WRITE}, set()),
+    ("cp -r src build/out", set(), {C.BULK_WRITE}),
+    ("tar -tf a.tar", set(), {C.BULK_WRITE}),
 ]
 
 _SPECIAL = {

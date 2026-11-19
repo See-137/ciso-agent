@@ -6,7 +6,8 @@ import pytest
 from tests.inspection.samples import ids, write
 
 from ciso.common.activity import ActionKind, InspectionInput, Severity
-from ciso.inspection import Inspector, normalise_path, sensitive_path_rules
+from ciso.common.paths import normalise_path
+from ciso.inspection import Inspector, sensitive_path_rules
 
 pytestmark = pytest.mark.unit
 
@@ -120,11 +121,14 @@ def test_paths_are_not_checked_for_reads() -> None:
 
 
 def test_normalisation() -> None:
-    assert normalise_path(r"C:\Repo\Sub\..\.ENV. ") == "repo/.env"
-    assert [r.rule_id for r in sensitive_path_rules(".env ")] == ["path.env_file"]
-    assert normalise_path("./a//b/./c") == "a/b/c"
-    assert normalise_path("../../x") == "x"
-    assert normalise_path(r"\\?\D:\x\y") == "x/y"
+    """Inspection uses the shared normaliser (queue Q13); the same cases still hold."""
+    assert normalise_path(r"C:\Repo\Sub\..\.ENV. ", windows=True).text == "c:/repo/.env"
+    env = ["path.env_file"]
+    assert [r.rule_id for r in sensitive_path_rules(r"C:\Repo\Sub\..\.ENV. ")] == env
+    assert [r.rule_id for r in sensitive_path_rules(".env ")] == env
+    assert normalise_path("./a//b/./c", windows=True).text == "a/b/c"
+    assert [r.rule_id for r in sensitive_path_rules("../../.env")] == env
+    assert normalise_path(r"\\?\D:\x\y", windows=True).text == "d:/x/y"
 
 
 def test_one_path_can_match_two_rules() -> None:

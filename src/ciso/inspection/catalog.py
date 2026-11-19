@@ -7,14 +7,17 @@ from types import MappingProxyType
 from typing import Final
 
 from ciso.inspection.code_scan import CODE_RULES
-from ciso.inspection.paths import PATH_RULES
+from ciso.inspection.paths import DIRECTORY_RULES, PATH_RULES
 from ciso.inspection.rules import COVERAGE_RULES, Rule
 from ciso.inspection.sandbox import SANDBOX_RULES
 from ciso.inspection.secret_scan import SECRET_RULES
+from ciso.inspection.suppression import SUPPRESSION_RULES
 
 ALL_RULES: Final[tuple[Rule, ...]] = (
     *SECRET_RULES,
     *PATH_RULES,
+    *DIRECTORY_RULES,
+    *SUPPRESSION_RULES,
     *CODE_RULES,
     *COVERAGE_RULES,
     *SANDBOX_RULES,

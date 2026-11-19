@@ -17,6 +17,8 @@ from __future__ import annotations
 import re
 
 from ciso.common.paths import (
+    ANY_SEGMENTS,
+    HOME,
     UNKNOWN_LOCATION,
     NormalisedPath,
     join_paths,
@@ -25,6 +27,7 @@ from ciso.common.paths import (
 )
 from ciso.governance import programs as p
 from ciso.governance.analysis_state import AnalyzerState
+from ciso.governance.bulk_write import HERE, UNKNOWN, bulk_destinations
 from ciso.governance.classes import CommandClass as C
 from ciso.governance.danger_paths import (
     GIT_CONFIG_PATHS,
@@ -53,6 +56,19 @@ def path_text(word: Word) -> str:
     ):
         return "~" + text[1:]
     return text
+
+
+def _broad(path: NormalisedPath) -> bool:
+    """The current directory, only parents of it, the home directory, a root, or a place
+    nobody can name (queue Q15)."""
+    segments = path.segments
+    if path.unknown or ANY_SEGMENTS in segments:
+        return True
+    if all(segment == ".." for segment in segments):  # also the empty path: here
+        return True
+    if segments in ((HOME,), ("",)):
+        return True
+    return len(segments) == 1 and bool(_DRIVE_RE.fullmatch(segments[0] + "/"))
 
 
 def _matches(patterns: tuple[str, ...], path: NormalisedPath) -> bool:
@@ -96,6 +112,29 @@ class PathChecks(AnalyzerState):
         ):
             if _matches(patterns, path):
                 self.classes.add(cls)
+
+    def bulk_write(self, name: str, args: list[Word]) -> None:
+        """A recursive copy or move, a sync or an extraction into a broad place is a
+        `bulk_write` (queue Q15). The destination is read as written and from the
+        directory an earlier `cd` moved to; either reading being broad is enough."""
+        found = bulk_destinations(name, [w.text for w in args])
+        for destination in found or ():
+            if isinstance(destination, str):
+                text = destination  # attached to its option; an expansion in it is DYN
+            elif destination == UNKNOWN:
+                text = DYN
+            elif destination == HERE:
+                text = "."
+            else:
+                text = path_text(args[destination])
+            if self._broad_destination(text):
+                self.classes.add(C.BULK_WRITE)
+                return
+
+    def _broad_destination(self, text: str) -> bool:
+        literal = text.replace("$", _OPAQUE).replace("%", _OPAQUE)
+        normal = normalise_path(literal, windows=True)
+        return _broad(normal) or _broad(join_paths(self.cwd, normal))
 
     def path_word(self, word: Word, *, writes: bool, strict: bool) -> None:
         self.path(path_text(word), writes=writes, strict=strict)

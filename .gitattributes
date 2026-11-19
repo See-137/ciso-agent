@@ -1,0 +1,4 @@
+# Generated artifacts are compared byte for byte with their source by tests; keep them
+# identical on every platform whatever core.autocrlf says.
+integrations/claude_code/managed/** -text
+config/governance-ruleset.provisional.json -text

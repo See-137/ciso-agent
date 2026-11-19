@@ -64,6 +64,13 @@ CREDENTIAL_PATHS: tuple[str, ...] = (
     "**/.cargo/credentials*",
     "**/*.ppk",
     "/proc/**/environ",
+    # The AI-governance hook client's own admin-owned configuration, code and device
+    # token (review H4; integrations/claude_code/managed/pack_source.json): a token read
+    # by the agent lets it report as another machine or person.
+    "**/AIGovernance",
+    "**/AIGovernance/**",
+    "**/ai-governance",
+    "**/ai-governance/**",
 )
 
 AGENT_CONFIG_PATHS: tuple[str, ...] = (

@@ -12,7 +12,7 @@ pytestmark = pytest.mark.unit
 
 
 def test_every_rule_is_indexed_once() -> None:
-    assert len(RULE_TABLE) == len(ALL_RULES) == 43  # + path.ssh_access, path.editor_autorun
+    assert len(RULE_TABLE) == len(ALL_RULES) == 47  # + bulk_write_broad (Q13), 3 suppression (H3)
     with pytest.raises(ValueError, match="share the id"):
         _index((ALL_RULES[0], Rule(ALL_RULES[0].rule_id, "x", Severity.LOW, "t", "r")))
 
@@ -35,6 +35,7 @@ def test_categories_are_the_documented_ones() -> None:
         "coverage",
         "sandbox",
         "test_failure",
+        "scan_suppression",
     }
 
 

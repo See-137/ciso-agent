@@ -99,8 +99,9 @@ def test_pending_then_the_rules_decide(world: World) -> None:
     assert "needs_change" not in pending
     report_back(world, change_id)
     done = decide_with(world, change_id)
-    # The default ruleset has no allow rule for pushes: a clean, scanned push is asked.
-    assert (done["verdict"], done["reason"]) == ("ask", "default_ask")
+    # The default ruleset allows a verified person's clean, fully scanned push to a
+    # branch that is not protected (rule allow-scanned-push-known-people).
+    assert (done["verdict"], done["reason"]) == ("allow", "rule_allow")
 
 
 def test_a_secret_in_the_change_is_denied(world: World) -> None:

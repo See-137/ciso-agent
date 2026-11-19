@@ -18,8 +18,13 @@ import re
 from collections.abc import Iterator
 from typing import Final, NamedTuple
 
+from ciso.inspection.bulk_targets import HERE, UNKNOWN, Destination, bulk_destinations
+
 #: Most write targets taken from one command.
 MAX_TARGETS: Final = 64
+#: Stands for a destination that cannot be read; the shared normaliser reads a control
+#: character as unknown text (any path).
+UNKNOWN_TEXT: Final = "\x00"
 
 _TOKEN = re.compile(
     r"""(?P<space>\s+)
@@ -150,4 +155,51 @@ def write_targets(text: str) -> tuple[str, ...]:
             found.append(target)
             if not _ABSOLUTE.match(target):
                 found.extend(f"{directory}/{target}" for directory in directories)
+    return tuple(dict.fromkeys(found))[:MAX_TARGETS]
+
+
+def _destination_text(destination: Destination, args: list[str]) -> str:
+    if isinstance(destination, str):
+        return destination or UNKNOWN_TEXT
+    if destination == HERE:
+        return "."
+    if destination == UNKNOWN:
+        return UNKNOWN_TEXT
+    return args[destination]
+
+
+class DirectoryTarget(NamedTuple):
+    """A directory a command writes below. `bulk` is True for a recursive copy or move, a
+    sync or an extraction, whose broad destination is itself a finding; a plain copy's
+    destination is checked only against the sensitive directories."""
+
+    path: str
+    bulk: bool
+
+
+def _directories(name: str, args: list[str]) -> list[DirectoryTarget]:
+    """Directories a command writes below: a bulk write's destinations (queue Q13), and a
+    copy or move destination, which may be a directory as well as a file."""
+    found = bulk_destinations(name, args)
+    if found is not None:
+        return [DirectoryTarget(_destination_text(i, args), True) for i in found]
+    if name in _COPIES:
+        return [DirectoryTarget(path, False) for path in _written(name, args)]
+    return []
+
+
+def directory_targets(text: str) -> tuple[DirectoryTarget, ...]:
+    """The directories `text` writes files below (`.` for the current one), plus relative
+    ones joined to earlier `cd` directories. At most `MAX_TARGETS`."""
+    found: list[DirectoryTarget] = []
+    directories: list[str] = []
+    for command in _commands(text):
+        name, args = _program(command.words)
+        if name in _DIRECTORY:
+            directories.extend(_positional(args)[:1])
+            continue
+        for target in _directories(name, args):
+            found.append(target)
+            if target.path and not _ABSOLUTE.match(target.path):
+                found.extend(target._replace(path=f"{d}/{target.path}") for d in directories)
     return tuple(dict.fromkeys(found))[:MAX_TARGETS]

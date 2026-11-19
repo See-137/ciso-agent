@@ -101,9 +101,10 @@ def register_device(api: Api, name: str = DEVICE_NAME) -> tuple[str, str]:
     return str(body["device_id"]), str(body["token"])
 
 
-def build_world(make_api: ApiFactory, **kwargs: Any) -> World:
+def build_world(make_api: ApiFactory, *, assign: bool = True, **kwargs: Any) -> World:
     """A device, an employee bound to the device's OS account, and an approved
-    employee-operated agent identified by the device name."""
+    employee-operated agent identified by the device name. With `assign` (the default) the
+    device is assigned to the employee, so the session is verified; without it, declared."""
     kwargs.setdefault("environ", GOV_ENV)
     api = make_api(**kwargs)
     device_id, device_token = register_device(api)
@@ -116,6 +117,10 @@ def build_world(make_api: ApiFactory, **kwargs: Any) -> World:
         headers=admin,
     )
     assert r.status_code == 201, r.text
+    # The default ruleset allows only verified attribution: the device must be assigned
+    # to the person for the bound OS account to count as verified.
+    if assign:
+        api.container.governance.agent_admin.assign_device(api.admin, device_id, [person_ref])
     r = api.client.post(
         "/v1/agents",
         json={

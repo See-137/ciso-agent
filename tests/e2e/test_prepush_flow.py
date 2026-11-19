@@ -1,13 +1,18 @@
 """Spec S5 end to end through the API test client: a push is held until its change is
 uploaded and scanned by a fake sandbox (an HTTP mock behind the real sandbox client and
 worker); then a clean push to a feature branch is allowed, a push to a protected branch is
-asked, and a push whose tests fail or that carries a secret is denied."""
+asked, and a push whose tests fail or that carries a secret is denied.
+
+Runs on the packaged default's rules (governance-default-2026.11.19-3 has the pre-push
+rules; the test settings load the deployment ruleset derived from it). The held steps
+(the first ask, `checks_pending`) make no finding; the final verdict does. Only a
+verified person (assigned to the reporting device) is allowed; a declared one is asked.
+"""
 
 from __future__ import annotations
 
 import base64
 import json
-from pathlib import Path
 from typing import Any
 
 import httpx
@@ -15,10 +20,10 @@ import pytest
 from tests.api.governance_helpers import SANDBOX_TOKEN, SESSION, World, build_world, pre_tool
 from tests.api.helpers import ApiFactory
 from tests.app.change_helpers import HEAD, SECRET_DIFF, push_upload
-from tests.e2e.prepush_ruleset import write_ruleset
 
 from ciso.app.sandbox_client import SandboxClient
 from ciso.app.sandbox_worker import SandboxWorker
+from ciso.governance import load_default_ruleset
 
 pytestmark = pytest.mark.unit
 
@@ -53,17 +58,42 @@ class FakeSandbox:
         )
 
 
-@pytest.fixture
-def world(make_api: ApiFactory, tmp_path: Path) -> World:
-    ruleset = write_ruleset(tmp_path / "ruleset.json")
-
-    def scanned(settings: Any) -> Any:
-        gov = settings.governance.model_copy(update={"ruleset_path": ruleset})
-        return settings.model_copy(update={"governance": gov})
-
-    built = build_world(make_api, change=scanned)
-    assert built.api.container.governance.engine.ruleset.deny_all is False
+def _declared_world(make_api: ApiFactory) -> World:
+    built = build_world(make_api, assign=False)
+    ruleset = built.api.container.governance.engine.ruleset
+    assert ruleset.deny_all is False
+    # The test settings name the deployment ruleset, which is derived from the default
+    # (config/derive_governance_ruleset.py): the same rules, no e2e-only additions.
+    default = load_default_ruleset().document
+    assert ruleset.document is not None
+    assert default is not None
+    assert ruleset.document.rules == default.rules
+    assert "allow-scanned-push-known-people" in {r.id for r in default.rules}
     return built
+
+
+@pytest.fixture
+def declared_world(make_api: ApiFactory) -> World:
+    """The person is bound to the OS account but not assigned to the device: declared."""
+    return _declared_world(make_api)
+
+
+@pytest.fixture
+def world(make_api: ApiFactory) -> World:
+    """The person is assigned to the reporting device, so the session is verified (only
+    a verified person's push can be allowed: review H4)."""
+    built = _declared_world(make_api)
+    built.api.container.governance.agent_admin.assign_device(
+        built.api.admin, built.device_id, [f"actor:{built.person_id}"]
+    )
+    return built
+
+
+def findings(world: World) -> list[dict[str, Any]]:
+    r = world.api.client.get("/v1/findings", headers=world.admin_headers())
+    assert r.status_code == 200, r.text
+    items: list[dict[str, Any]] = r.json()["findings"]
+    return items
 
 
 @pytest.fixture
@@ -110,9 +140,12 @@ def push(world: World, command: str, diff: str | None = None) -> tuple[dict[str,
     return world.decide(request), request
 
 
-def test_a_clean_push_is_held_then_allowed(world: World, sandbox: FakeSandbox) -> None:
+def test_a_clean_push_of_a_verified_person_is_held_then_allowed(
+    world: World, sandbox: FakeSandbox
+) -> None:
     held, request = push(world, "git push origin feature")
     assert (held["verdict"], held["reason"]) == ("deny", "checks_pending")
+    assert findings(world) == []  # the first ask and checks_pending are protocol steps
     assert worker(world, sandbox).run_once() is True
     assert sandbox.jobs[0]["archive_format"] == "git_bundle"
     assert sandbox.jobs[0]["checks"] == ["secrets", "code", "tests"]
@@ -137,8 +170,9 @@ def test_a_push_whose_tests_fail_is_denied(world: World, sandbox: FakeSandbox) -
     worker(world, sandbox).run_once()
     answer = world.decide(request)
     assert (answer["verdict"], answer["reason"]) == ("deny", "rule_deny")
-    findings = world.api.client.get("/v1/findings", headers=world.admin_headers())
-    assert "test_failure" in findings.text
+    keys = {item["check_key"] for item in findings(world)}
+    assert "decision.deny.rule_deny" in keys
+    assert any("test_failure" in key for key in keys)
 
 
 def test_a_push_with_a_planted_secret_is_denied(world: World, sandbox: FakeSandbox) -> None:
@@ -164,3 +198,12 @@ def test_a_sandbox_that_is_down_never_lets_the_push_through(world: World) -> Non
     )
     broken.run_once()
     assert world.decide(request)["reason"] == "checks_pending"
+
+
+def test_a_clean_push_of_a_declared_person_is_asked_not_allowed(
+    declared_world: World, sandbox: FakeSandbox
+) -> None:
+    _held, request = push(declared_world, "git push origin feature")
+    worker(declared_world, sandbox).run_once()
+    answer = declared_world.decide(request)
+    assert (answer["verdict"], answer["reason"]) == ("ask", "default_ask")

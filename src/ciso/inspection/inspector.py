@@ -22,7 +22,7 @@ from ciso.common.errors import ValidationFailed
 from ciso.inspection._collect import Collector, location
 from ciso.inspection.code_scan import scan_code
 from ciso.inspection.diff import DEV_NULL, MalformedDiff, parse_unified_diff
-from ciso.inspection.paths import check_path
+from ciso.inspection.paths import check_directory, check_path
 from ciso.inspection.rules import (
     BINARY_NOT_INSPECTED,
     CONTENT_MISSING,
@@ -34,7 +34,8 @@ from ciso.inspection.rules import (
 )
 from ciso.inspection.sandbox import from_sandbox_report
 from ciso.inspection.secret_scan import scan_secrets
-from ciso.inspection.shell_targets import write_targets
+from ciso.inspection.shell_targets import directory_targets, write_targets
+from ciso.inspection.suppression import scan_suppressions
 
 #: Largest text (content, command or diff) inspected, in characters. The shared contract
 #: refuses an `InspectionInput` whose content is longer, so through `Inspector.inspect`
@@ -48,6 +49,7 @@ CHECK_PATHS: Final = "inspection.paths"
 CHECK_SECRETS: Final = "inspection.secrets"
 CHECK_CODE: Final = "inspection.code_risk"
 CHECK_DIFF: Final = "inspection.diff"
+CHECK_SUPPRESSION: Final = "inspection.scan_suppression"
 
 #: Shown as the location of findings in a shell command.
 COMMAND_LABEL: Final = "command"
@@ -85,6 +87,8 @@ def _inspect_text(text: str, path: str, out: Collector, *, code: bool) -> None:
     if code:
         out.ran(CHECK_CODE)
         scan_code(lines, path, out)
+        out.ran(CHECK_SUPPRESSION)
+        scan_suppressions(lines, path, out)
 
 
 def _inspect_diff_into(text: str, out: Collector) -> None:
@@ -100,7 +104,7 @@ def _inspect_diff_into(text: str, out: Collector) -> None:
     if not files:
         out.incomplete(DIFF_EMPTY)
         return
-    for check in (CHECK_PATHS, CHECK_SECRETS, CHECK_CODE):
+    for check in (CHECK_PATHS, CHECK_SECRETS, CHECK_CODE, CHECK_SUPPRESSION):
         out.ran(check)
     for item in files:
         shown = item.new_path if item.new_path != DEV_NULL else item.old_path
@@ -111,6 +115,7 @@ def _inspect_diff_into(text: str, out: Collector) -> None:
         lines = _bounded(((line.number, line.text) for line in item.added), shown, out)
         scan_secrets(lines, shown, out)
         scan_code(lines, shown, out)
+        scan_suppressions(lines, shown, out)
 
 
 def inspect_diff(diff_text: str, *, action_id: str) -> InspectionResult:
@@ -130,7 +135,9 @@ class Inspector:
     - prompt: secrets in the text;
     - shell command, or any other kind that carries text: the files it writes (redirects,
       `tee`, copy and move destinations, content cmdlets; `ciso.inspection.shell_targets`)
-      against the sensitive paths, then secrets and risky code.
+      against the sensitive paths, the directories it writes below (recursive copies and
+      moves, syncs, archive extraction, copy destinations) against the sensitive
+      directories (`paths.directory_rules`), then secrets and risky code.
 
     `required_sandbox_checks` is the set of sandbox check ids every change must pass; it
     has no default, and while it is unset no sandbox result is ever complete.
@@ -169,6 +176,8 @@ class Inspector:
             out.ran(CHECK_PATHS)
             for target in write_targets(item.command):
                 check_path(target, out)
+            for directory in directory_targets(item.command):
+                check_directory(directory.path, out, broad=directory.bulk)
             _inspect_text(item.command, COMMAND_LABEL, out, code=True)
         return out.result(item.action_id)
 

@@ -8,6 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from ciso.common.activity import (
+    ActionKind,
     GovernanceDecision,
     InspectionFinding,
     InspectionResult,
@@ -105,13 +106,66 @@ def _inspection_draft(item: InspectionFinding, path: str) -> Draft:
     )
 
 
+#: Reason codes of a pre-push protocol step on their own (docs/skill/decision-api.md,
+#: "Pre-push change upload"): the sandbox report is not back yet.
+PROTOCOL_STEP_CODES: frozenset[str] = frozenset({"checks_pending"})
+#: The only reason of the first ask of a push or commit: its change is not attached yet.
+AWAITING_CHANGE_CODE = "inspection_incomplete"
+#: The inspection's coverage finding for "no content was sent" (`ciso.inspection.rules
+#: .CONTENT_MISSING`; this package may import only `ciso.common`, so the id is a string).
+CONTENT_MISSING_CHECK = "inspection.content_missing"
+COVERAGE_CATEGORY = "coverage"
+_CHANGE_KINDS = frozenset({ActionKind.SHELL_COMMAND, ActionKind.GIT_PUSH, ActionKind.GIT_COMMIT})
+
+
+def is_protocol_step(
+    decision: GovernanceDecision, action: ObservedAction, inspection: InspectionResult | None
+) -> bool:
+    """A BEFORE deny that is a step of the pre-push protocol, not a problem: every reason
+    is `checks_pending`; or the only reason is `inspection_incomplete` on a push or commit
+    (or a shell command, which the service holds only when it pushes or commits) whose
+    inspection is incomplete for no reason but the missing change (no coverage finding
+    other than `inspection.content_missing`). A gap with a cause (the sandbox could not
+    run, a line too long, a malformed diff) is not a protocol step.
+
+    Decided here, from the decision's reason codes, because every decision reaches
+    findings through `record`; the service's own refusals (`checks_pending` today) never
+    become a decision, and this keeps them silent if they ever do. Limitation: this layer
+    cannot see whether the answer carried `needs_change`, so a push the client cannot
+    upload (not one plain command) is silent here too; it is still denied and audited.
+    """
+    if decision.verdict is not Verdict.DENY or action.phase is not Phase.BEFORE:
+        return False
+    codes = {reason.code for reason in decision.reasons}
+    if codes <= PROTOCOL_STEP_CODES:
+        return True
+    if codes != {AWAITING_CHANGE_CODE} or action.kind not in _CHANGE_KINDS:
+        return False
+    if inspection is None or inspection.complete:
+        return False
+    return all(
+        f.check_id == CONTENT_MISSING_CHECK
+        for f in inspection.findings
+        if f.category == COVERAGE_CATEGORY
+    )
+
+
 def drafts_for(
     decision: GovernanceDecision, action: ObservedAction, inspection: InspectionResult | None
 ) -> list[Draft]:
     """Deny or ask: one decision finding. Inspection findings of medium or worse: one each.
-    An allowed action with nothing at medium or worse: nothing."""
+    An allowed action with nothing at medium or worse: nothing. A pre-push protocol step
+    (`is_protocol_step`) makes neither the decision finding nor the "content missing"
+    coverage finding; any other inspection finding is still recorded."""
     path = action.target.get("path", "")
     drafts: list[Draft] = []
+    if is_protocol_step(decision, action, inspection):
+        return [
+            _inspection_draft(item, path)
+            for item in (inspection.findings if inspection is not None else ())
+            if at_least(item.severity, INSPECTION_THRESHOLD)
+            and item.check_id != CONTENT_MISSING_CHECK
+        ]
     if decision.verdict in DECISION_SEVERITY:
         code = decision.reasons[0].code
         drafts.append(

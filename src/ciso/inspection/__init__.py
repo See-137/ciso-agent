@@ -20,7 +20,7 @@ from ciso.inspection.inspector import (
     Inspector,
     inspect_diff,
 )
-from ciso.inspection.paths import normalise_path, sensitive_path_rules
+from ciso.inspection.paths import directory_rules, sensitive_path_rules
 from ciso.inspection.rules import Rule
 from ciso.inspection.sandbox import MAX_REPORT_CHARS, from_sandbox_report
 
@@ -37,9 +37,9 @@ __all__ = [
     "Inspector",
     "MalformedDiff",
     "Rule",
+    "directory_rules",
     "from_sandbox_report",
     "inspect_diff",
-    "normalise_path",
     "parse_unified_diff",
     "sensitive_path_rules",
 ]

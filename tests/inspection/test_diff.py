@@ -207,6 +207,7 @@ def test_only_added_lines_are_inspected() -> None:
         "inspection.paths",
         "inspection.secrets",
         "inspection.code_risk",
+        "inspection.scan_suppression",
     }
 
 

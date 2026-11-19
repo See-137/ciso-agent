@@ -287,6 +287,7 @@ class Analyzer(CodeRunners):
             self.downloaded |= {basename(t) for t in texts if t and DYN not in t}
         if name in p.MOVERS:
             self.moved_file(texts)
+        self.bulk_write(name, args)
         if name in p.SCRIPT_HOSTS:
             self.script_host(texts)
         if not facts.read_only:

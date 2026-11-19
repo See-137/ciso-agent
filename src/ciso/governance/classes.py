@@ -33,6 +33,10 @@ class CommandClass(StrEnum):
     OBFUSCATION = "obfuscation"
     #: An environment variable that chooses what code runs was set for the command.
     ENVIRONMENT_HIJACK = "environment_hijack"
+    #: A recursive copy or move, a sync or an archive extraction into the current
+    #: directory, a parent, the home directory, a root or an unknown place (queue Q15):
+    #: it can plant files, agent configuration among them, that no path rule sees.
+    BULK_WRITE = "bulk_write"
     UNPARSEABLE = "unparseable"
     READ_ONLY_COMMAND = "read_only_command"
 
