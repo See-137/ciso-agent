@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 import json
 from types import ModuleType
+from typing import Any
 
 import pytest
 from tests.integrations.claude_code.conftest import (
@@ -54,20 +55,21 @@ def test_unreadable_account_gives_no_claim(hc: ModuleType) -> None:
     assert claim is None
 
 
-def test_surface_comes_from_managed_environment(
-    run: Runner, transport: FakeTransport, environ: dict[str, str]
+def test_surface_comes_from_the_configuration_file(
+    run: Runner, transport: FakeTransport, config: dict[str, Any], environ: dict[str, str]
 ) -> None:
     transport.results.append((200, ALLOW))
-    run("decide", PRE_TOOL_USE, env={**environ, "AIGOV_SURFACE": "ide"})
+    env = {**environ, "AIGOV_SURFACE": "web"}  # the environment plays no part
+    run("decide", PRE_TOOL_USE, env=env, conf={**config, "surface": "ide"})
     assert json.loads(transport.calls[0].body)["surface"] == "ide"
 
 
-def test_invalid_surface_falls_back_to_cli(
-    run: Runner, transport: FakeTransport, environ: dict[str, str]
+def test_invalid_surface_blocks(
+    run: Runner, transport: FakeTransport, config: dict[str, Any]
 ) -> None:
-    transport.results.append((200, ALLOW))
-    run("decide", PRE_TOOL_USE, env={**environ, "AIGOV_SURFACE": "bad surface!"})
-    assert json.loads(transport.calls[0].body)["surface"] == "cli"
+    code, _out, _err = run("decide", PRE_TOOL_USE, conf={**config, "surface": "bad surface!"})
+    assert code == 2
+    assert transport.calls == []
 
 
 def test_client_uses_only_the_standard_library() -> None:
@@ -76,6 +78,7 @@ def test_client_uses_only_the_standard_library() -> None:
         "__future__",
         "base64",
         "collections",
+        "contextlib",
         "dataclasses",
         "getpass",
         "json",
@@ -85,12 +88,14 @@ def test_client_uses_only_the_standard_library() -> None:
         "re",
         "socket",
         "ssl",
+        "stat",
         "subprocess",
         "sys",
         "tempfile",
         "time",
         "typing",
         "urllib",
+        "uuid",
         "pwd",
     }
     imported: set[str] = set()

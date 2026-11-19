@@ -96,11 +96,15 @@ class SandboxLimits(Model):
 
 
 class SandboxImages(Model):
-    """Container images (pinned by digest) and scanner rule locations inside them.
+    """Container images (pinned by digest) and scanner files inside them.
 
-    `gitleaks_config` is optional: unset means gitleaks' built-in rules, which ship inside
-    the binary. `semgrep_config` is required for the code check: semgrep has no built-in
-    rules and fetching registry rules would need the network.
+    The scanners never take configuration from the repository they scan (review H3):
+    `gitleaks_config` is required (with no `--config`, gitleaks would load the target's
+    own `.gitleaks.toml`); `gitleaks_ignore_file` names an EMPTY file baked into the image,
+    passed as `--gitleaks-ignore-path` so the repository's `.gitleaksignore` is never read;
+    `semgrep_config` is required (semgrep has no built-in rules and fetching registry
+    rules would need the network). `git` is required for every bundle job: it verifies
+    the bundle's head and range before anything else runs.
     """
 
     python_tests: Image | None = None
@@ -111,6 +115,7 @@ class SandboxImages(Model):
     git: Image | None = None
     semgrep_config: ImagePath | None = None
     gitleaks_config: ImagePath | None = None
+    gitleaks_ignore_file: ImagePath | None = None
 
     def configured(self) -> tuple[str, ...]:
         """Every configured image, in field order, without duplicates."""
@@ -122,7 +127,7 @@ class SandboxImages(Model):
         return tuple(found)
 
     def missing(self) -> tuple[str, ...]:
-        """Required entries that are unset (`gitleaks_config` is optional)."""
+        """Required entries that are unset."""
         required = (
             "python_tests",
             "node_tests",
@@ -131,6 +136,8 @@ class SandboxImages(Model):
             "semgrep",
             "git",
             "semgrep_config",
+            "gitleaks_config",
+            "gitleaks_ignore_file",
         )
         return tuple(name for name in required if getattr(self, name) is None)
 

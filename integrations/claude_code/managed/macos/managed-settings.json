@@ -56,14 +56,16 @@
     ]
   },
   "env": {
-    "AIGOV_SERVICE_URL": "https://REPLACE_ME_SERVICE_HOST",
-    "AIGOV_DECIDE_TIMEOUT_SECONDS": "8",
-    "AIGOV_REPORT_TIMEOUT_SECONDS": "1",
-    "AIGOV_HOOK_DEADLINE_SECONDS": "14",
-    "AIGOV_SURFACE": "cli",
     "CLAUDE_CODE_SYNC_PLUGIN_INSTALL": "1",
-    "AIGOV_DEVICE_TOKEN_FILE": "/Library/Application Support/AIGovernance/device-token",
-    "AIGOV_GIT_PATH": "/usr/bin/git"
+    "GIT_CONFIG_COUNT": "4",
+    "GIT_CONFIG_KEY_0": "core.hooksPath",
+    "GIT_CONFIG_KEY_1": "safe.bareRepository",
+    "GIT_CONFIG_VALUE_1": "explicit",
+    "GIT_CONFIG_KEY_2": "push.recurseSubmodules",
+    "GIT_CONFIG_VALUE_2": "no",
+    "GIT_CONFIG_KEY_3": "protocol.ext.allow",
+    "GIT_CONFIG_VALUE_3": "never",
+    "GIT_CONFIG_VALUE_0": "/Library/Application Support/AIGovernance/git-hooks"
   },
   "companyAnnouncements": [
     "AI activity in Claude Code on this machine is checked and recorded by the company AI-governance service. Refused actions show a decision id; quote it when you contact the security team."

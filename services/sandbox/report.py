@@ -1,9 +1,13 @@
 """The sandbox report, in the exact wire format the governance lane consumes.
 
-    {"job_id": str, "checks": [{"check_id": str, "status": "passed|failed|error|skipped",
+    {"job_id": str, "head": str|null,
+     "checks": [{"check_id": str, "status": "passed|failed|error|skipped",
       "findings": [{"rule": str, "category": str, "severity": "info|low|medium|high|critical",
                     "path": str, "line": int|null, "message": str}],
       "tests": {"passed": int, "failed": int, "errors": int}}]}
+
+`head` is the commit a bundle job's HEAD was verified to be, and scanned under (review
+M2); null for a tar job and whenever the bundle did not match what the job stated.
 
 Every text field is cleaned (`safe_text`) before it enters a model, because scanner output
 is untrusted and ends up in front of people and in the audit log.
@@ -74,6 +78,7 @@ class CheckReport(Model):
 
 class Report(Model):
     job_id: Annotated[str, Field(min_length=1, max_length=64)]
+    head: Annotated[str, Field(pattern=r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")] | None = None
     checks: tuple[CheckReport, ...]
 
     def to_wire(self) -> dict[str, Any]:
@@ -112,3 +117,32 @@ def error_check(check_id: str, code: str, message: str) -> CheckReport:
         status=Status.ERROR,
         findings=(finding(f"sandbox.{code}", "sandbox", Severity.INFO, message),),
     )
+
+
+#: Worst first: the status a merged check takes.
+_STATUS_ORDER: Final = (Status.ERROR, Status.FAILED, Status.PASSED, Status.SKIPPED)
+
+
+def merge_checks(first: CheckReport, second: CheckReport) -> CheckReport:
+    """One check from two runs of the same check (gitleaks over history and over the
+    tree): the worse status, the findings of both without repeats (capped, with a note when
+    cut), and the test counts added."""
+    status = min(first.status, second.status, key=_STATUS_ORDER.index)
+    found: list[ReportFinding] = []
+    for item in (*first.findings, *second.findings):
+        if item not in found:
+            found.append(item)
+    if len(found) > MAX_FINDINGS_PER_CHECK:
+        note = finding(
+            "sandbox.findings_truncated",
+            "sandbox",
+            Severity.INFO,
+            f"{len(found)} findings; only the first {MAX_FINDINGS_PER_CHECK - 1} are listed",
+        )
+        found = [*found[: MAX_FINDINGS_PER_CHECK - 1], note]
+    tests = TestCounts(
+        passed=first.tests.passed + second.tests.passed,
+        failed=first.tests.failed + second.tests.failed,
+        errors=first.tests.errors + second.tests.errors,
+    )
+    return CheckReport(check_id=first.check_id, status=status, findings=tuple(found), tests=tests)

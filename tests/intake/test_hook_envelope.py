@@ -10,6 +10,7 @@ import pytest
 from tests.fakes.core import FakeRedactor
 from tests.intake.conftest import (
     DEVICE_ACTOR,
+    DEVICE_NAME,
     RECEIVED_AT,
     envelope,
     hook_payload_pre_bash,
@@ -31,7 +32,11 @@ pytestmark = pytest.mark.unit
 
 def normalize(request: Any) -> Any:
     return normalize_hook_report(
-        request, device_actor_id=DEVICE_ACTOR, received_at=RECEIVED_AT, redactor=FakeRedactor()
+        request,
+        device_actor_id=DEVICE_ACTOR,
+        device_name=DEVICE_NAME,
+        received_at=RECEIVED_AT,
+        redactor=FakeRedactor(),
     )
 
 
@@ -248,6 +253,7 @@ def test_device_actor_id_must_be_clean() -> None:
         normalize_hook_report(
             envelope(hook_payload_pre_bash()),
             device_actor_id="svc\nforged",
+            device_name=DEVICE_NAME,
             received_at=RECEIVED_AT,
             redactor=FakeRedactor(),
         )
@@ -273,13 +279,41 @@ def test_device_is_a_target_attribute_matching_the_agents_registry_key() -> None
 
 
 @pytest.mark.parametrize("absent", ["missing", "null"])
-def test_no_device_gives_no_device_target_or_claim(absent: str) -> None:
+def test_no_stated_device_still_gets_the_tokens_device(absent: str) -> None:
     request = envelope(hook_payload_pre_bash())
     if absent == "missing":
         del request["device"]
     else:
         request["device"] = None
     action = normalize(request).action
+    assert action.target["device"] == DEVICE_NAME
+    assert "device_actor" in {claim.kind for claim in action.identity_claims}
+
+
+def test_a_stated_device_other_than_the_tokens_is_refused() -> None:
+    """Review H4 / queue Q8: the device comes from the authenticated device actor."""
+    request = envelope(hook_payload_pre_bash())
+    request["device"] = "WS-0999"
+    assert refused(request) is RefusalCode.DEVICE_MISMATCH
+
+
+def test_a_device_without_a_registered_name_has_no_device_target() -> None:
+    request = envelope(hook_payload_pre_bash())
+    del request["device"]
+    action = normalize_hook_report(
+        request, device_actor_id=DEVICE_ACTOR, device_name=None, received_at=RECEIVED_AT,
+        redactor=FakeRedactor(),
+    ).action  # fmt: skip
     assert "device" not in action.target
     assert "device_name" not in {claim.kind for claim in action.identity_claims}
-    assert "device_actor" in {claim.kind for claim in action.identity_claims}
+    request["device"] = DEVICE_NAME
+    assert refused_with(request, None) is RefusalCode.DEVICE_MISMATCH
+
+
+def refused_with(request: Any, device_name: str | None) -> RefusalCode:
+    with pytest.raises(IntakeRefused) as info:
+        normalize_hook_report(
+            request, device_actor_id=DEVICE_ACTOR, device_name=device_name,
+            received_at=RECEIVED_AT, redactor=FakeRedactor(),
+        )  # fmt: skip
+    return info.value.code

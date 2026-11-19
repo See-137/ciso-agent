@@ -70,7 +70,7 @@ def test_h3_unverified_claims_do_not_make_an_organizational_agent(
     )
     assert result.agent_ref != bot.ref
     assert result.agent_class is not AgentClass.ORGANIZATIONAL
-    assert result.person_ref == ALICE_REF
+    assert result.person_ref is None  # Alice is not assigned to DEVICE_A (QF2)
 
 
 @pytest.mark.usefixtures("bound")
@@ -113,8 +113,9 @@ def test_m5_a_client_marked_verified_claim_is_only_declared(
     registry: AgentRegistry, make_action: ActionFactory
 ) -> None:
     result = registry.attribute(make_action(claims=((*BOB_OS, True),), device_actor=DEVICE_A))
-    assert result.person_ref == BOB_REF
-    assert result.state is InformationState.DECLARED
+    assert result.person_ref is None
+    assert result.state is InformationState.UNKNOWN
+    assert "person_not_assigned_to_device" in result.reasons
 
 
 @pytest.mark.usefixtures("bound")
@@ -130,8 +131,8 @@ def test_m5_assigned_device_makes_the_os_account_verified(
     bob = registry.attribute(
         make_action(session="b", claims=((*BOB_OS, False),), device_actor=DEVICE_A)
     )
-    assert bob.person_ref == BOB_REF
-    assert bob.state is InformationState.DECLARED
+    assert bob.person_ref is None  # an unassigned account claim does not count (QF2)
+    assert bob.state is InformationState.UNKNOWN
     assert "person_not_assigned_to_device" in bob.reasons
     # The assignment counts only through the verified device actor, not a device name.
     named = registry.attribute(make_action(session="c", claims=((*ALICE_OS, False),)))

@@ -13,7 +13,9 @@ Order of checks inside `require`, chosen so the cheap refusals come first:
 1. rate limit not configured: 503 (fail closed, no invented number, G14);
 2. client address over its budget: 429, before any token work. Each request is charged to
    the address before authentication and refunded once it authenticates, so a burst of
-   bad tokens costs at most `limit` scrypt hashes and audit writes per window;
+   bad tokens costs at most `limit` scrypt hashes and audit writes per window. A token
+   that authenticated before (`KnownTokens`) skips this step, so a flood of bad tokens
+   from a shared proxy address does not lock out the devices behind it (review L5);
 3. header missing or malformed, or the token refused: 401 with one identical body;
 4. authenticated actor over its budget: 429;
 5. permission not granted for the route's scope: 403;
@@ -28,8 +30,8 @@ Two more declarations exist besides `require`:
   strips it from any role): it is held only by an authenticated actor of type `service`
   with no roles that the device directory lists as an active device (`ciso.app.devices`).
   Same order as `require`, so each device has its own rate budget (`actor:<id>`). The
-  write gate does not apply: the governance engine applies the kill switch itself, so
-  reads stay possible while it is engaged.
+  write gate applies only where the route asks for it (`gated=True`, the change upload,
+  review M1); decide leaves it to the governance engine, which applies the kill switch.
 - `require_signed_webhook()` declares `SIGNED_WEBHOOK`: no bearer token; the handler
   authenticates the delivery by its webhook signature (`ciso.app.governance_gate`). The
   dependency applies the rate limit per client address only.
@@ -45,7 +47,7 @@ from fastapi import FastAPI, Request
 from fastapi.dependencies.models import Dependant
 from fastapi.routing import APIRoute
 
-from ciso.api.ratelimit import RateLimiter
+from ciso.api.ratelimit import KnownTokens, RateLimiter
 from ciso.app.container import Container
 from ciso.common.enums import ActorType, AuditOutcome, KillCapability
 from ciso.common.errors import AuthenticationError
@@ -142,18 +144,40 @@ def _too_many(retry_after: int) -> ApiError:
     )
 
 
+def known_tokens_of(request: Request) -> KnownTokens:
+    known: KnownTokens = request.app.state.known_tokens
+    return known
+
+
+def _token_or_none(request: Request) -> str | None:
+    try:
+        return bearer_token(request)
+    except ApiError:
+        return None
+
+
 def _authenticate(request: Request, limiter: RateLimiter) -> Principal:
+    """Pre-authentication budget per client address, except for a token that already
+    authenticated (review L5: behind a proxy, one bad-token flood must not lock out every
+    device). The caller then charges the actor's own budget."""
     container = container_of(request)
+    known = known_tokens_of(request)
     address = f"addr:{request.client.host if request.client else 'unknown'}"
-    pre = limiter.hit(address)
-    if not pre.allowed:
-        raise _too_many(pre.retry_after_seconds)
+    presented = _token_or_none(request)
+    trusted = presented is not None and known.known(presented)
+    if not trusted:
+        pre = limiter.hit(address)
+        if not pre.allowed:
+            raise _too_many(pre.retry_after_seconds)
     token = bearer_token(request)
     try:
         principal = container.authenticator.authenticate(token)
     except AuthenticationError:
+        known.forget(token)
         raise unauthenticated() from None
-    limiter.refund(address)
+    if not trusted:
+        limiter.refund(address)
+    known.remember(token)
     return principal
 
 
@@ -277,8 +301,10 @@ def _is_device(request: Request, principal: Principal) -> bool:
         raise ApiError(503, "unavailable", "a required control is unavailable") from exc
 
 
-def require_device() -> Callable[[Request], Principal]:
-    """The dependency of the decide and activity routes. See the module docstring."""
+def require_device(*, gated: bool = False) -> Callable[[Request], Principal]:
+    """The dependency of the decide, activity and change routes (module docstring).
+    `gated`: a state-changing request is refused with 503 `writes_blocked` while the gated
+    reader blocks WRITES (review M1: change uploads)."""
 
     def dependency(request: Request) -> Principal:
         limiter = limiter_of(request)
@@ -294,6 +320,8 @@ def require_device() -> Callable[[Request], Principal]:
         if not _is_device(request, principal):
             raise ApiError(403, "forbidden", "not permitted")
         if request.method.upper() in STATE_CHANGING:
+            if gated and _writes_blocked(request):
+                raise ApiError(503, "writes_blocked", "writes are blocked on this platform")
             _audit_attempt(request, principal, route)
         return principal
 
@@ -303,12 +331,25 @@ def require_device() -> Callable[[Request], Principal]:
     return dependency
 
 
+def gate_limiter_of(request: Request) -> RateLimiter:
+    limiter: RateLimiter = request.app.state.gate_limiter
+    return limiter
+
+
 def require_signed_webhook() -> Callable[[Request], None]:
-    """No bearer token: rate-limited per client address; the handler checks the signature."""
+    """No bearer token: rate-limited per client address on the central gate's OWN budget
+    (`governance.central_gate_rate_limit_per_minute`, queue Q10: the platform posts from
+    few addresses and must not share the general budget). Unset: 503. The handler checks
+    the signature."""
 
     def dependency(request: Request) -> None:
-        limiter = limiter_of(request)
-        _configured(limiter)
+        limiter = gate_limiter_of(request)
+        if not limiter.configured:
+            raise ApiError(
+                503,
+                "rate_limit_not_configured",
+                "central_gate_rate_limit_per_minute is not set; the gate refuses requests",
+            )
         address = f"addr:{request.client.host if request.client else 'unknown'}"
         decision = limiter.hit(address)
         if not decision.allowed:

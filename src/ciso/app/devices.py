@@ -93,6 +93,18 @@ class DeviceDirectory:
             ).first()
         return row is not None
 
+    def active_name(self, actor_id: str) -> str | None:
+        """The registered name of an active device actor; None for anything else (reviews
+        H4, Q8: the decision uses this name, never the request's). Raises when the table
+        cannot be read; callers refuse."""
+        with read_connection(self._engine) as conn:
+            row = conn.execute(
+                select(devices.c.name)
+                .where(devices.c.actor_id == actor_id)
+                .where(devices.c.revoked_at.is_(None))
+            ).first()
+        return None if row is None else str(row.name)
+
     def get(self, device_id: str) -> Device:
         with read_connection(self._engine) as conn:
             row = conn.execute(select(devices).where(devices.c.actor_id == device_id)).first()

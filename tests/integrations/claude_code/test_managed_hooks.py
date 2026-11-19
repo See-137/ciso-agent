@@ -133,10 +133,11 @@ def test_checker_rejects_a_hook_a_user_could_replace(
 
 
 def test_the_client_timeouts_are_shorter_than_the_hook_timeouts(source: dict[str, Any]) -> None:
-    env = source["policy"]["env"]
+    client = source["client"]
     timeouts = source["hook_timeouts"]
-    assert float(env["AIGOV_DECIDE_TIMEOUT_SECONDS"]) < timeouts["decide"]
-    assert float(env["AIGOV_REPORT_TIMEOUT_SECONDS"]) < min(timeouts.values())
+    assert client["decide_timeout_seconds"] < timeouts["decide"]
+    assert client["hook_deadline_seconds"] < timeouts["decide"]
+    assert client["report_timeout_seconds"] < min(timeouts.values())
 
 
 @pytest.mark.parametrize("platform", PLATFORMS)

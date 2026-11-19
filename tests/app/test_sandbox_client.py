@@ -12,6 +12,7 @@ import httpx
 import pytest
 from tests.fakes.core import FakeSecrets
 
+from ciso.app.change_models import SandboxInput
 from ciso.app.sandbox_client import MAX_REPORT_BYTES, SandboxClient, SandboxUnavailable
 from ciso.common.errors import FailClosed
 
@@ -22,6 +23,8 @@ TOKEN_REF = "secret://sandbox_token"
 TOKEN = "sandbox-token-for-tests-0123"
 BUNDLE = b"# v2 git bundle\nbody"
 BASE = "a" * 40
+HEAD = "b" * 40
+ITEM = SandboxInput(change_id="chg_1", bundle=BUNDLE, base=BASE, head=HEAD, commits=(HEAD,))
 REPORT = {"job_id": "chg_1", "checks": [{"check_id": "tests", "status": "passed"}]}
 
 
@@ -44,7 +47,7 @@ def test_a_job_is_posted_with_the_token_and_the_report_comes_back() -> None:
         seen.append(request)
         return httpx.Response(200, json=REPORT)
 
-    report = _client(handler).run("chg_1", BUNDLE, BASE, ("secrets", "code", "tests"))
+    report = _client(handler).run(ITEM, ("secrets", "code", "tests"))
     assert report == REPORT
     (request,) = seen
     assert (request.method, str(request.url)) == ("POST", URL + "/v1/jobs")
@@ -55,6 +58,8 @@ def test_a_job_is_posted_with_the_token_and_the_report_comes_back() -> None:
         "archive_format": "git_bundle",
         "archive_b64": base64.b64encode(BUNDLE).decode(),
         "base_ref": BASE,
+        "head": HEAD,
+        "commits": [HEAD],
         "checks": ["secrets", "code", "tests"],
     }
 
@@ -63,7 +68,7 @@ def test_a_job_is_posted_with_the_token_and_the_report_comes_back() -> None:
 def test_any_other_status_is_unavailable(status: int) -> None:
     client = _client(lambda r: httpx.Response(status, headers={"location": "http://x"}))
     with pytest.raises(SandboxUnavailable) as caught:
-        client.run("chg_1", BUNDLE, BASE, ("tests",))
+        client.run(ITEM, ("tests",))
     assert caught.value.code == f"status_{status}"
 
 
@@ -71,7 +76,7 @@ def test_any_other_status_is_unavailable(status: int) -> None:
 def test_a_bad_body_is_unavailable(body: bytes) -> None:
     client = _client(lambda r: httpx.Response(200, content=body))
     with pytest.raises(SandboxUnavailable):
-        client.run("chg_1", BUNDLE, BASE, ("tests",))
+        client.run(ITEM, ("tests",))
 
 
 def test_a_transport_error_is_unavailable() -> None:
@@ -79,14 +84,14 @@ def test_a_transport_error_is_unavailable() -> None:
         raise httpx.ConnectError("refused", request=request)
 
     with pytest.raises(SandboxUnavailable) as caught:
-        _client(handler).run("chg_1", BUNDLE, BASE, ("tests",))
+        _client(handler).run(ITEM, ("tests",))
     assert caught.value.code == "ConnectError"
 
 
 def test_the_token_never_reaches_an_error_message() -> None:
     client = _client(lambda r: httpx.Response(500, text=TOKEN))
     with pytest.raises(SandboxUnavailable) as caught:
-        client.run("chg_1", BUNDLE, BASE, ("tests",))
+        client.run(ITEM, ("tests",))
     assert TOKEN not in str(caught.value)
     assert TOKEN not in repr(client)
 
@@ -110,21 +115,20 @@ def test_unset_or_unusable_settings_refuse_before_sending(changes: dict[str, Any
 
     client = _client(handler, **changes)
     with pytest.raises(FailClosed):
-        client.run("chg_1", BUNDLE, BASE, ("tests",))
+        client.run(ITEM, ("tests",))
     assert sent == []
 
 
 @pytest.mark.parametrize("url", ["http://sandbox.example.test", "ftp://127.0.0.1"])
 def test_a_url_that_is_not_https_or_loopback_refuses(url: str) -> None:
     with pytest.raises(FailClosed):
-        _client(lambda r: httpx.Response(200, json=REPORT), url=url).run(
-            "chg_1", BUNDLE, BASE, ("tests",)
+        _client(lambda r: httpx.Response(200, json=REPORT), url=url).run(ITEM, ("tests",)
         )
 
 
 def test_no_checks_refuses() -> None:
     with pytest.raises(FailClosed):
-        _client(lambda r: httpx.Response(200, json=REPORT)).run("chg_1", BUNDLE, BASE, ())
+        _client(lambda r: httpx.Response(200, json=REPORT)).run(ITEM, ())
 
 
 def test_the_sandbox_client_is_the_only_network_module() -> None:
@@ -145,5 +149,5 @@ def test_an_oversized_but_well_formed_report_is_unavailable() -> None:
     body = json.dumps({"job_id": "x", "pad": "y" * MAX_REPORT_BYTES}).encode()
     client = _client(lambda r: httpx.Response(200, content=body))
     with pytest.raises(SandboxUnavailable) as caught:
-        client.run("chg_1", BUNDLE, BASE, ("tests",))
+        client.run(ITEM, ("tests",))
     assert caught.value.code == "report_too_large"

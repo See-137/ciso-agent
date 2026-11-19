@@ -11,8 +11,10 @@ not shared between processes; that is acceptable for the single-process build (A
 
 from __future__ import annotations
 
+import hashlib
 import math
 import threading
+from collections import OrderedDict
 from datetime import datetime, timedelta
 
 from ciso.common.clock import Clock
@@ -77,3 +79,47 @@ class RateLimiter:
 
     def _sweep(self, now: datetime) -> None:
         self._windows = {k: v for k, v in self._windows.items() if now < v[0] + WINDOW}
+
+
+#: Most token fingerprints `KnownTokens` remembers (least recently used is forgotten).
+MAX_KNOWN_TOKENS = 4096
+
+
+class KnownTokens:
+    """Fingerprints (SHA-256) of bearer tokens that authenticated (review L5).
+
+    Behind a reverse proxy every client shares one address, so a flood of bad tokens fills
+    that address's pre-authentication budget and every hook would get 429. A token that
+    authenticated before skips the address check (it still pays the authentication and
+    its actor's own budget). A token that later fails is forgotten at once, so a revoked
+    token cannot use the bypass to make the service hash for it.
+    """
+
+    def __init__(self, capacity: int = MAX_KNOWN_TOKENS) -> None:
+        self._capacity = capacity
+        self._seen: OrderedDict[str, None] = OrderedDict()
+        self._lock = threading.Lock()
+
+    @staticmethod
+    def fingerprint(token: str) -> str:
+        return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+    def known(self, token: str) -> bool:
+        key = self.fingerprint(token)
+        with self._lock:
+            if key in self._seen:
+                self._seen.move_to_end(key)
+                return True
+            return False
+
+    def remember(self, token: str) -> None:
+        key = self.fingerprint(token)
+        with self._lock:
+            self._seen[key] = None
+            self._seen.move_to_end(key)
+            while len(self._seen) > self._capacity:
+                self._seen.popitem(last=False)
+
+    def forget(self, token: str) -> None:
+        with self._lock:
+            self._seen.pop(self.fingerprint(token), None)

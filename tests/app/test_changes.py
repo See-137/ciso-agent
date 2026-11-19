@@ -87,7 +87,7 @@ def test_the_stored_change_is_encrypted_at_rest(world: ChangeWorld) -> None:
 def test_the_worker_gets_back_the_bundle_it_was_sent(world: ChangeWorld) -> None:
     receipt = world.service.submit(push_upload(), device_actor_id=DEVICE)
     got = world.service.load_for_sandbox(receipt.change_id)
-    assert (got.bundle, got.base) == (BUNDLE, BASE)
+    assert (got.bundle, got.base, got.head) == (BUNDLE, None, HEAD)
     assert MARKER not in repr(got)
 
 
@@ -171,7 +171,7 @@ def test_the_same_change_twice_is_stored_once(world: ChangeWorld) -> None:
     again = world.service.submit(push_upload(), device_actor_id=DEVICE)
     assert (again.change_id, again.created) == (first.change_id, False)
     assert len(list(world.store_dir.iterdir())) == 1
-    other = world.service.submit(push_upload(session_id="sess-2"), device_actor_id=DEVICE)
+    other = world.service.submit(push_upload(session_id="sess-2"), device_actor_id="svc_other")
     assert other.change_id != first.change_id
 
 

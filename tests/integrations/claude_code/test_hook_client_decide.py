@@ -54,6 +54,7 @@ def test_request_follows_the_contract(run: Runner, transport: FakeTransport) -> 
     assert call.headers["Content-Type"] == "application/json"
     assert call.timeout == 8.0
     body = json.loads(call.body)
+    assert len(body.pop("report_id")) == 32
     assert body == {
         "format": "assistant_hook_v1",
         "event": "PreToolUse",
@@ -74,12 +75,12 @@ def test_tls_context_verifies_certificates(run: Runner, transport: FakeTransport
 
 
 def test_token_is_not_written_to_output_or_log(
-    run: Runner, transport: FakeTransport, environ: dict[str, str]
+    run: Runner, transport: FakeTransport, config: dict[str, Any]
 ) -> None:
     transport.results.append(ConnectionRefusedError("refused"))
     code, out, err = run("decide", PRE_TOOL_USE)
     assert code == 2
-    log = Path(environ["AIGOV_LOG_FILE"]).read_text(encoding="utf-8")
+    log = Path(config["log_file"]).read_text(encoding="utf-8")
     assert "decide" in log
     for text in (out, err, log):
         assert TOKEN_VALUE not in text
@@ -242,43 +243,38 @@ def test_oversized_answer_blocks(run: Runner, transport: FakeTransport, hc: Modu
 
 
 @pytest.mark.parametrize(
-    "missing",
-    [
-        "AIGOV_SERVICE_URL",
-        "AIGOV_DEVICE_TOKEN_FILE",
-        "AIGOV_DECIDE_TIMEOUT_SECONDS",
-    ],
+    "missing", ["service_url", "token_file", "decide_timeout_seconds", "ca_bundle", "log_file"]
 )
 def test_missing_configuration_blocks_without_calling(
     run: Runner,
     transport: FakeTransport,
     hc: ModuleType,
-    environ: dict[str, str],
+    config: dict[str, Any],
     missing: str,
 ) -> None:
-    env = {k: v for k, v in environ.items() if k != missing}
-    assert_blocked(run("decide", PRE_TOOL_USE, env=env), hc)
+    conf = {k: v for k, v in config.items() if k != missing}
+    assert_blocked(run("decide", PRE_TOOL_USE, conf=conf), hc)
     assert transport.calls == []
 
 
-@pytest.mark.parametrize("value", ["0", "-1", "abc", "nan", "inf", "", "601"])
+@pytest.mark.parametrize("value", [0, -1, "8", "abc", float("inf"), True, None, 601])
 def test_invalid_timeout_blocks(
     run: Runner,
     transport: FakeTransport,
     hc: ModuleType,
-    environ: dict[str, str],
-    value: str,
+    config: dict[str, Any],
+    value: Any,
 ) -> None:
-    env = {**environ, "AIGOV_DECIDE_TIMEOUT_SECONDS": value}
-    assert_blocked(run("decide", PRE_TOOL_USE, env=env), hc)
+    conf = {**config, "decide_timeout_seconds": value}
+    assert_blocked(run("decide", PRE_TOOL_USE, conf=conf), hc)
     assert transport.calls == []
 
 
 def test_missing_token_file_blocks(
-    run: Runner, transport: FakeTransport, hc: ModuleType, environ: dict[str, str], tmp_path: Any
+    run: Runner, transport: FakeTransport, hc: ModuleType, config: dict[str, Any], tmp_path: Any
 ) -> None:
-    env = {**environ, "AIGOV_DEVICE_TOKEN_FILE": str(tmp_path / "absent")}
-    assert_blocked(run("decide", PRE_TOOL_USE, env=env), hc)
+    conf = {**config, "token_file": str(tmp_path / "absent")}
+    assert_blocked(run("decide", PRE_TOOL_USE, conf=conf), hc)
     assert transport.calls == []
 
 
@@ -287,12 +283,11 @@ def test_empty_or_unsafe_token_blocks(
     run: Runner,
     transport: FakeTransport,
     hc: ModuleType,
-    environ: dict[str, str],
     token_file: Any,
     token: str,
 ) -> None:
     token_file.write_text(token, encoding="utf-8")
-    assert_blocked(run("decide", PRE_TOOL_USE, env=environ), hc)
+    assert_blocked(run("decide", PRE_TOOL_USE), hc)
     assert transport.calls == []
 
 
@@ -307,39 +302,47 @@ def test_empty_or_unsafe_token_blocks(
         "https://governance.example.test/#frag",
         "https://",
         "governance.example.test",
+        None,
     ],
 )
 def test_unsafe_service_url_blocks(
     run: Runner,
     transport: FakeTransport,
     hc: ModuleType,
-    environ: dict[str, str],
-    url: str,
+    config: dict[str, Any],
+    url: Any,
 ) -> None:
-    env = {**environ, "AIGOV_SERVICE_URL": url}
-    assert_blocked(run("decide", PRE_TOOL_USE, env=env), hc)
+    conf = {**config, "service_url": url}
+    assert_blocked(run("decide", PRE_TOOL_USE, conf=conf), hc)
     assert transport.calls == []
 
 
 @pytest.mark.parametrize("url", ["http://localhost:8765", "http://127.0.0.1:8765/base"])
 def test_plain_http_is_allowed_only_to_loopback(
-    run: Runner, transport: FakeTransport, environ: dict[str, str], url: str
+    run: Runner, transport: FakeTransport, config: dict[str, Any], url: str
 ) -> None:
     transport.results.append((200, answer("allow")))
-    env = {**environ, "AIGOV_SERVICE_URL": url}
-    assert run("decide", PRE_TOOL_USE, env=env)[0] == 0
+    conf = {**config, "service_url": url, "ca_bundle": None}
+    assert run("decide", PRE_TOOL_USE, conf=conf)[0] == 0
     assert transport.calls[0].url == url.rstrip("/") + "/v1/governance/decide"
     assert transport.calls[0].context is None
 
 
-def test_missing_ca_bundle_blocks(
-    run: Runner, transport: FakeTransport, hc: ModuleType, environ: dict[str, str], tmp_path: Any
+@pytest.mark.parametrize("bundle", [None, "missing-ca.pem", "not-a-pem.pem"])
+def test_missing_or_unusable_ca_bundle_blocks(
+    run: Runner,
+    transport: FakeTransport,
+    hc: ModuleType,
+    config: dict[str, Any],
+    tmp_path: Any,
+    bundle: str | None,
 ) -> None:
-    env = {**environ, "AIGOV_CA_BUNDLE": str(tmp_path / "missing-ca.pem")}
-    assert_blocked(run("decide", PRE_TOOL_USE, env=env), hc)
+    (tmp_path / "not-a-pem.pem").write_text("nothing here", encoding="utf-8")
+    conf = {**config, "ca_bundle": None if bundle is None else str(tmp_path / bundle)}
+    assert_blocked(run("decide", PRE_TOOL_USE, conf=conf), hc)
     assert transport.calls == []
-    log = Path(environ["AIGOV_LOG_FILE"]).read_text(encoding="utf-8")
-    assert "outcome=ca_bundle_missing" in log
+    log = Path(config["log_file"]).read_text(encoding="utf-8")
+    assert "outcome=ca_bundle_" in log
 
 
 def test_oversized_request_blocks(run: Runner, transport: FakeTransport, hc: ModuleType) -> None:

@@ -7,11 +7,13 @@ deleted log, never a fresh start.
 
 from __future__ import annotations
 
-from sqlalchemy import Column, Index, String, Table, Text
+from sqlalchemy import Column, Index, String, Table, Text, UniqueConstraint
 
 from ciso.common.db import UtcDateTime, operational_metadata, register_schema
 
-register_schema("app", 1)
+#: Version 2 (fix round QF2): `app_changes.repository`, `app_approved_heads`,
+#: `app_gate_deliveries`. No migration: nothing is deployed, local databases are recreated.
+register_schema("app", 2)
 
 app_state = Table(
     "app_state",
@@ -49,6 +51,7 @@ changes = Table(
     Column("device_actor_id", String(64), nullable=False),
     Column("session_id", String(128), nullable=False),
     Column("kind", String(16), nullable=False),
+    Column("repository", String(512), nullable=True),
     Column("remote", String(64), nullable=True),
     Column("branch", String(200), nullable=True),
     Column("source", String(200), nullable=True),
@@ -64,4 +67,32 @@ changes = Table(
     Column("report_at", UtcDateTime, nullable=True),
     Column("deleted_at", UtcDateTime, nullable=True),
     Index("ix_app_changes_fingerprint", "fingerprint"),
+)
+
+#: Heads the service let a scanned push go out with, per repository key
+#: (`ciso.app.change_models.normalize_repository`) and destination branch (review H1, Q18).
+#: Everything reachable from such a head was scanned, so a later push may start its scan
+#: there; any other base is refused.
+approved_heads = Table(
+    "app_approved_heads",
+    operational_metadata,
+    Column("id", String(40), primary_key=True),
+    Column("repository", String(512), nullable=False),
+    Column("branch", String(200), nullable=False),
+    Column("head", String(64), nullable=False),
+    Column("change_id", String(40), nullable=False),
+    Column("decision_id", String(40), nullable=False),
+    Column("recorded_at", UtcDateTime, nullable=False),
+    UniqueConstraint("repository", "branch", "head", name="uq_app_approved_heads"),
+)
+
+#: Central gate deliveries already answered, shared by every API process (review L7): a
+#: repeated `webhook-id` gets the stored verdict back instead of a second decision.
+gate_deliveries = Table(
+    "app_gate_deliveries",
+    operational_metadata,
+    Column("message_id", String(256), primary_key=True),
+    Column("until", UtcDateTime, nullable=False),
+    Column("verdict", Text, nullable=True),
+    Column("recorded_at", UtcDateTime, nullable=False),
 )

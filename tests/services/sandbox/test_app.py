@@ -194,3 +194,29 @@ def test_only_the_two_routes_exist(client: TestClient) -> None:
     assert paths == {"/v1/jobs", "/healthz"}
     assert client.get("/docs").status_code == 404
     assert client.get("/openapi.json").status_code == 404
+
+
+def test_a_bundle_job_reaches_the_runner_with_its_head_and_commits(
+    settings: SandboxSettings, clock: FixedClock
+) -> None:
+    from tests.services.sandbox.bundle_support import BUNDLE, HEAD, OLDER, FakeRepo
+
+    repo = FakeRepo()
+    backend = FakeBackend(outcomes={"verify": repo, "gitleaks": outcome(0, b"[]")})
+    app = create_app(runner=JobRunner(backend, settings, clock), token=SecretStr(TOKEN))
+    job = body(
+        archive_format="git_bundle",
+        archive_b64=base64.b64encode(BUNDLE).decode(),
+        head=HEAD,
+        commits=[HEAD, OLDER],
+        base_ref="3" * 40,
+    )
+    with TestClient(app) as test_client:
+        response = test_client.post("/v1/jobs", json=job, headers=auth())
+        missing = test_client.post(
+            "/v1/jobs", json={**job, "head": None, "commits": None}, headers=auth()
+        )
+    assert response.status_code == 200
+    assert response.json()["head"] == HEAD
+    assert len(repo.verifications) == 1
+    assert missing.status_code == 422

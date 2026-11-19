@@ -280,9 +280,10 @@ def test_organizational_agent_has_no_operator_rule(
     result = registry.attribute(make_action(claims=((*BOB_OS, False),), device_actor="svc_build"))
     assert result.agent_ref == bot.ref
     assert result.agent_class is AgentClass.ORGANIZATIONAL
-    assert result.person_ref == BOB_REF
-    # No operator rule; Bob is not assigned to the build device, so he stays declared.
-    assert result.state is InformationState.DECLARED
+    # No operator rule; Bob is not assigned to the build device, so his account claim does
+    # not count at all (review H4, fix round QF2).
+    assert result.person_ref is None
+    assert result.state is InformationState.UNKNOWN
     assert result.reasons == ("person_not_assigned_to_device",)
 
 

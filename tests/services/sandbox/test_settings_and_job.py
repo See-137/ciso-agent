@@ -20,6 +20,7 @@ from services.sandbox import job as job_module
 pytestmark = pytest.mark.unit
 
 SHA = "0123456789abcdef0123456789abcdef01234567"
+HEAD = "fedcba9876543210fedcba9876543210fedcba98"
 
 
 def test_limits_default_to_unset_and_refuse() -> None:
@@ -94,6 +95,8 @@ def test_images_default_to_unset() -> None:
         "semgrep",
         "git",
         "semgrep_config",
+        "gitleaks_config",
+        "gitleaks_ignore_file",
     }
 
 
@@ -132,10 +135,11 @@ def test_archive_size_is_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_base_ref_must_be_a_full_commit_id_and_needs_history() -> None:
-    assert job(archive_format=ArchiveFormat.GIT_BUNDLE, base_ref=SHA).base_ref == SHA
+    bundle = {"archive_format": ArchiveFormat.GIT_BUNDLE, "head": HEAD, "commits": (HEAD,)}
+    assert job(**bundle, base_ref=SHA).base_ref == SHA
     for bad in ("main", "HEAD~1", SHA[:-1], SHA.upper(), f"{SHA};rm -rf /", f"--{SHA}"):
         with pytest.raises(ValidationError):
-            job(archive_format=ArchiveFormat.GIT_BUNDLE, base_ref=bad)
+            job(**bundle, base_ref=bad)
     with pytest.raises(ValidationError, match="history"):
         job(archive_format=ArchiveFormat.TAR, base_ref=SHA)
 

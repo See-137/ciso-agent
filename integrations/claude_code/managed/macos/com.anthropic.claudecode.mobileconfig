@@ -38,22 +38,26 @@
 			</dict>
 			<key>env</key>
 			<dict>
-				<key>AIGOV_DECIDE_TIMEOUT_SECONDS</key>
-				<string>8</string>
-				<key>AIGOV_DEVICE_TOKEN_FILE</key>
-				<string>/Library/Application Support/AIGovernance/device-token</string>
-				<key>AIGOV_GIT_PATH</key>
-				<string>/usr/bin/git</string>
-				<key>AIGOV_HOOK_DEADLINE_SECONDS</key>
-				<string>14</string>
-				<key>AIGOV_REPORT_TIMEOUT_SECONDS</key>
-				<string>1</string>
-				<key>AIGOV_SERVICE_URL</key>
-				<string>https://REPLACE_ME_SERVICE_HOST</string>
-				<key>AIGOV_SURFACE</key>
-				<string>cli</string>
 				<key>CLAUDE_CODE_SYNC_PLUGIN_INSTALL</key>
 				<string>1</string>
+				<key>GIT_CONFIG_COUNT</key>
+				<string>4</string>
+				<key>GIT_CONFIG_KEY_0</key>
+				<string>core.hooksPath</string>
+				<key>GIT_CONFIG_KEY_1</key>
+				<string>safe.bareRepository</string>
+				<key>GIT_CONFIG_KEY_2</key>
+				<string>push.recurseSubmodules</string>
+				<key>GIT_CONFIG_KEY_3</key>
+				<string>protocol.ext.allow</string>
+				<key>GIT_CONFIG_VALUE_0</key>
+				<string>/Library/Application Support/AIGovernance/git-hooks</string>
+				<key>GIT_CONFIG_VALUE_1</key>
+				<string>explicit</string>
+				<key>GIT_CONFIG_VALUE_2</key>
+				<string>no</string>
+				<key>GIT_CONFIG_VALUE_3</key>
+				<string>never</string>
 			</dict>
 			<key>extraKnownMarketplaces</key>
 			<dict>

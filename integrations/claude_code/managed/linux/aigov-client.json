@@ -1,0 +1,12 @@
+{
+  "service_url": "https://REPLACE_ME_SERVICE_HOST",
+  "decide_timeout_seconds": 8,
+  "report_timeout_seconds": 1,
+  "hook_deadline_seconds": 14,
+  "surface": "cli",
+  "ca_bundle": "/etc/ai-governance/ca-bundle.pem",
+  "token_file": "/etc/ai-governance/device-token",
+  "git_path": "/usr/bin/git",
+  "log_file": "/var/log/ai-governance/hook-client.log",
+  "git_hooks_dir": "/usr/local/lib/ai-governance/git-hooks"
+}

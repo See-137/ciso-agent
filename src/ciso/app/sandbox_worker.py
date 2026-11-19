@@ -13,6 +13,13 @@ goes back to the queue (`fail`: backoff, then dead-letter at
 `safety.queue_max_attempts`); when the queue gives up, the change is recorded as failed,
 so `decide` answers "not inspected" instead of "pending" for ever.
 
+It idles while the kill switch blocks WRITES (review M1). A report must echo the change id
+as `job_id` and name the head the service holds, or the change is refused (reviews L1,
+M2). A busy sandbox (429) keeps the job on its lease for the next loop, so it costs no
+attempt (review L3); any other error fails the job, never the worker (review L2); a job
+the queue dead-lettered because its last lease expired fails its change
+(`ChangeService.reconcile_dead`).
+
 Restart-safe through the queue's leases: a worker that dies mid-job leaves the job
 leased; once the lease expires another worker takes it. A job whose change already has
 its report (the worker died after storing it) is completed without a second send. Each
@@ -29,11 +36,11 @@ import argparse
 import logging
 import threading
 from collections.abc import Mapping, Sequence
-from typing import Any, Protocol
+from typing import Any, Final, Protocol
 
-from ciso.app.change_models import SANDBOX_JOB_KIND
+from ciso.app.change_models import SANDBOX_JOB_KIND, SandboxInput
 from ciso.app.changes import ChangeService
-from ciso.app.sandbox_client import SandboxClient
+from ciso.app.sandbox_client import SandboxBusy, SandboxClient
 from ciso.common.errors import CisoError, FailClosed, NotFound
 from ciso.common.ids import new_id
 from ciso.inspection import Inspector
@@ -43,9 +50,12 @@ logger = logging.getLogger(__name__)
 
 
 class SandboxRunner(Protocol):
-    def run(
-        self, job_id: str, bundle: bytes, base_ref: str, checks: Sequence[str]
-    ) -> Mapping[str, Any]: ...
+    def run(self, item: SandboxInput, checks: Sequence[str]) -> Mapping[str, Any]: ...
+
+
+#: The top-level report field naming the head the sandbox scanned. Taken off (and checked)
+#: before the closed report schema (`from_sandbox_report`) reads the rest.
+REPORT_HEAD: Final = "head"
 
 
 class SandboxWorker:
@@ -71,6 +81,8 @@ class SandboxWorker:
         self._poll = poll_seconds
         self._timeout = timeout_seconds
         self._lease = lease_seconds
+        #: A job leased while the sandbox was busy: tried again first, on the same lease.
+        self._held: Job | None = None
 
     def missing(self) -> tuple[str, ...]:
         """What keeps the worker from starting; empty when it can run."""
@@ -91,19 +103,30 @@ class SandboxWorker:
         while not stop.is_set():
             try:
                 busy = self.run_once()
-            except CisoError as exc:
+            except Exception as exc:
                 logger.error("sandbox worker: loop step failed (%s)", type(exc).__name__)
                 busy = False
             if not busy:
                 stop.wait(self._poll)
 
     def run_once(self) -> bool:
-        """Purge expired files, then handle at most one job. True when a job was handled."""
+        """Purge expired files, fail changes whose job was dead-lettered, then handle at
+        most one job. Does nothing while WRITES is blocked (review M1). True when a job
+        was handled."""
+        if self._changes.writes_blocked():
+            logger.warning("sandbox worker: writes are blocked; idle")
+            return False
         self._changes.purge()
-        job = self._queue.lease([SANDBOX_JOB_KIND], self._worker)
+        self._changes.reconcile_dead()
+        job = self._held or self._queue.lease([SANDBOX_JOB_KIND], self._worker)
+        self._held = None
         if job is None:
             return False
-        self._handle(job)
+        try:
+            self._handle(job)
+        except Exception as exc:  # one job's fault never stops the worker (review L2)
+            logger.error("sandbox worker: job failed (%s)", type(exc).__name__)
+            self._failed(job, str(job.payload.get("change_id", "")), exc)
         return True
 
     def _handle(self, job: Job) -> None:
@@ -114,17 +137,37 @@ class SandboxWorker:
             return
         try:
             item = self._changes.load_for_sandbox(change_id)
-            report = self._client.run(change_id, item.bundle, item.base, self._checks)
+            if self._changes.writes_blocked():
+                raise FailClosed("writes are blocked")
+            report = self._client.run(item, self._checks)
+        except SandboxBusy:
+            logger.info("sandbox worker: sandbox busy; %s kept for a later try", change_id)
+            self._held = self._queue.renew(job.job_id, self._worker, attempt=job.attempts)
+            return
         except (CisoError, OSError) as exc:
             logger.warning("sandbox worker: %s not sent (%s)", change_id, type(exc).__name__)
             self._failed(job, change_id, exc)
             return
-        result = self._inspector.from_sandbox_report(report, action_id=change_id)
+        self._store(change_id, item.head, report)
+        self._queue.complete(job.job_id, self._worker, attempt=job.attempts)
+
+    def _store(self, change_id: str, head: str, report: Mapping[str, Any]) -> None:
+        """Store the report, or refuse the change when it names another job or another
+        head than the one the service holds (reviews L1, M2)."""
+        rest = {k: v for k, v in report.items() if k != REPORT_HEAD}
+        if report.get("job_id") != change_id or report.get(REPORT_HEAD) != head:
+            logger.warning("sandbox worker: %s report names another job or head", change_id)
+            record = self._changes.record_refused
+            try:
+                record(change_id)
+            except NotFound:
+                logger.info("sandbox worker: %s already finished", change_id)
+            return
+        result = self._inspector.from_sandbox_report(rest, action_id=change_id)
         try:
             self._changes.record_report(change_id, result)
         except NotFound:
             logger.info("sandbox worker: %s already has its report", change_id)
-        self._queue.complete(job.job_id, self._worker, attempt=job.attempts)
 
     def _failed(self, job: Job, change_id: str, error: BaseException) -> None:
         after = self._queue.fail(job.job_id, self._worker, error, attempt=job.attempts)

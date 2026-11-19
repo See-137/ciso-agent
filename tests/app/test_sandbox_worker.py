@@ -19,7 +19,7 @@ from tests.app.change_helpers import (
     push_upload,
 )
 
-from ciso.app.change_models import SANDBOX_JOB_KIND, ChangeState
+from ciso.app.change_models import SANDBOX_JOB_KIND, ChangeState, SandboxInput
 from ciso.app.change_shape import ChangeKind, ChangeShape
 from ciso.app.sandbox_client import SandboxUnavailable
 from ciso.app.sandbox_worker import SandboxWorker
@@ -37,6 +37,7 @@ def report(job_id: str, failed_tests: int = 0) -> dict[str, Any]:
     tests = {"passed": 3, "failed": failed_tests, "errors": 0}
     return {
         "job_id": job_id,
+        "head": HEAD,
         "checks": [
             {"check_id": "secrets", "status": "passed"},
             {"check_id": "code", "status": "passed"},
@@ -50,10 +51,9 @@ class FakeSandbox:
         self.answers = list(answers)
         self.calls: list[tuple[str, bytes, str, tuple[str, ...]]] = []
 
-    def run(
-        self, job_id: str, bundle: bytes, base_ref: str, checks: Sequence[str]
-    ) -> Mapping[str, Any]:
-        self.calls.append((job_id, bundle, base_ref, tuple(checks)))
+    def run(self, item: SandboxInput, checks: Sequence[str]) -> Mapping[str, Any]:
+        job_id = item.change_id
+        self.calls.append((job_id, item.bundle, item.base, tuple(checks)))
         answer = self.answers.pop(0)
         if isinstance(answer, BaseException):
             raise answer

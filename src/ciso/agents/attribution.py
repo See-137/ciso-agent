@@ -11,10 +11,13 @@ for people only through `DeviceAssignment`.
 Person rules, over every claim seen in the session so far (not only this action's):
 - the session has more distinct claims than `MAX_SESSION_CLAIMS`: `disputed`, no person;
 - bound claims name two or more people: `disputed`, no person; one is never picked;
+- an `os_account` claim (the client's own word) on a session with a verified device actor
+  counts ONLY when the device is assigned to the person it is bound to (review H4, fix
+  round QF2); otherwise it is set aside and `person_not_assigned_to_device` is added;
 - bound claims all name one person: `verified` if any of them is issuer-verified, or is an
   `os_account` claim of a person assigned to the session's verified device actor; else
-  `declared` (with `person_not_assigned_to_device` when a verified device did not vouch);
-- no bound claim: `unknown`, no person.
+  `declared` (a bound claim with no verified device actor behind it);
+- no counted bound claim: `unknown`, no person.
 
 Agent rules (review H3):
 - a candidate matches when its surface equals the session's and the session shows every
@@ -86,14 +89,19 @@ def decide_person(
             continue
         on_device = claim.kind in DEVICE_VOUCHED_KINDS and device_people is not None
         vouched = on_device and person in (device_people or frozenset())
-        unvouched = unvouched or (on_device and not vouched)
+        if on_device and not vouched and not claim.verified:
+            unvouched = True
+            continue  # a client's own account claim counts only through assignment
         people[person] = people.get(person, False) or claim.verified or vouched
     if len(people) > 1:
         return PersonDecision(
             None, InformationState.DISPUTED, (AttributionReason.CONFLICTING_CLAIMS,)
         )
     if not people:
-        return PersonDecision(None, InformationState.UNKNOWN, (AttributionReason.NO_BOUND_CLAIM,))
+        reason = (
+            AttributionReason.PERSON_NOT_ON_DEVICE if unvouched else AttributionReason.NO_BOUND_CLAIM
+        )
+        return PersonDecision(None, InformationState.UNKNOWN, (reason,))
     (person, verified), *_ = people.items()
     if verified:
         return PersonDecision(person, InformationState.VERIFIED, ())

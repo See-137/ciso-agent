@@ -21,7 +21,8 @@
       "semgrep": null,
       "git": null,
       "semgrep_config": null,
-      "gitleaks_config": null
+      "gitleaks_config": null,
+      "gitleaks_ignore_file": null
     }
   }
 }

@@ -200,11 +200,12 @@ def build_governance(
         key_ref=settings.governance.change_key_ref,
         retention_seconds=settings.governance.change_retention_seconds,
         store_dir=settings.data_dir / CHANGES_DIR, actor_id=GOVERNANCE_ACTOR,
+        killswitch=killswitch,
     )  # fmt: skip
     pipeline = DecisionPipeline(
         clock=clock, audit=audit, redactor=redactor, attribution=registry,
         inspector=inspector, engine=decider, findings=findings, actor_id=GOVERNANCE_ACTOR,
-        changes=changes,
+        device_names=devices.active_name, changes=changes,
     )  # fmt: skip
     gate = GateEndpoint(
         build_central_gate(settings, secrets=secrets, clock=clock, redactor=redactor),

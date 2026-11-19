@@ -2,8 +2,10 @@
   "_comment": [
     "Source of the managed policy pack. Edit this file, then run build_pack.py to regenerate the per-platform artifacts, then check_pack.py.",
     "Every value containing REPLACE_ME is a placeholder; check_pack.py reports the pack NOT READY while any remains.",
-    "Timeouts in env and hook_timeouts are PROVISIONAL values (owner decision pending); the hook client refuses to run decide mode without them.",
-    "The enforcing hooks are generated into the managed settings `hooks` key from hook_timeouts and platform_hook (an admin-installed interpreter and an admin-owned copy of client/hook_client.py). The plugin carries the advisory skill only."
+    "Timeouts in client and hook_timeouts are PROVISIONAL values (owner decision pending); the hook client refuses to run without its configuration file.",
+    "The enforcing hooks are generated into the managed settings `hooks` key from hook_timeouts and platform_hook (an admin-installed interpreter and an admin-owned copy of client/hook_client.py). The plugin carries the advisory skill only.",
+    "The client reads one configuration file, written by build_pack.py as <platform>/aigov-client.json from `client` and `platform_client`; IT installs it next to platform_hook.client in the admin-owned install directory. Nothing security-relevant goes in `env` (review C1).",
+    "env carries git configuration for the agent's own git (GIT_CONFIG_COUNT/KEY_n/VALUE_n, review H2): an admin-owned empty hooks directory (per platform), safe.bareRepository=explicit, push.recurseSubmodules=no, protocol.ext.allow=never."
   ],
   "policy": {
     "forceLoginMethod": "claudeai",
@@ -61,12 +63,15 @@
       ]
     },
     "env": {
-      "AIGOV_SERVICE_URL": "https://REPLACE_ME_SERVICE_HOST",
-      "AIGOV_DECIDE_TIMEOUT_SECONDS": "8",
-      "AIGOV_REPORT_TIMEOUT_SECONDS": "1",
-      "AIGOV_HOOK_DEADLINE_SECONDS": "14",
-      "AIGOV_SURFACE": "cli",
-      "CLAUDE_CODE_SYNC_PLUGIN_INSTALL": "1"
+      "CLAUDE_CODE_SYNC_PLUGIN_INSTALL": "1",
+      "GIT_CONFIG_COUNT": "4",
+      "GIT_CONFIG_KEY_0": "core.hooksPath",
+      "GIT_CONFIG_KEY_1": "safe.bareRepository",
+      "GIT_CONFIG_VALUE_1": "explicit",
+      "GIT_CONFIG_KEY_2": "push.recurseSubmodules",
+      "GIT_CONFIG_VALUE_2": "no",
+      "GIT_CONFIG_KEY_3": "protocol.ext.allow",
+      "GIT_CONFIG_VALUE_3": "never"
     },
     "companyAnnouncements": [
       "AI activity in Claude Code on this machine is checked and recorded by the company AI-governance service. Refused actions show a decision id; quote it when you contact the security team."
@@ -77,18 +82,42 @@
     "report": 5,
     "SessionEnd": 2
   },
-  "platform_env": {
+  "client": {
+    "service_url": "https://REPLACE_ME_SERVICE_HOST",
+    "decide_timeout_seconds": 8,
+    "report_timeout_seconds": 1,
+    "hook_deadline_seconds": 14,
+    "surface": "cli"
+  },
+  "platform_client": {
     "windows": {
-      "AIGOV_DEVICE_TOKEN_FILE": "C:\\ProgramData\\AIGovernance\\device-token",
-      "AIGOV_GIT_PATH": "C:\\Program Files\\Git\\cmd\\git.exe"
+      "ca_bundle": "C:\\Program Files\\AIGovernance\\ca-bundle.pem",
+      "token_file": "C:\\ProgramData\\AIGovernance\\device-token",
+      "git_path": "C:\\Program Files\\Git\\cmd\\git.exe",
+      "log_file": "C:\\ProgramData\\AIGovernance\\logs\\hook-client.log"
     },
     "macos": {
-      "AIGOV_DEVICE_TOKEN_FILE": "/Library/Application Support/AIGovernance/device-token",
-      "AIGOV_GIT_PATH": "/usr/bin/git"
+      "ca_bundle": "/Library/Application Support/AIGovernance/ca-bundle.pem",
+      "token_file": "/Library/Application Support/AIGovernance/device-token",
+      "git_path": "/usr/bin/git",
+      "log_file": "/Library/Logs/AIGovernance/hook-client.log"
     },
     "linux": {
-      "AIGOV_DEVICE_TOKEN_FILE": "/etc/ai-governance/device-token",
-      "AIGOV_GIT_PATH": "/usr/bin/git"
+      "ca_bundle": "/etc/ai-governance/ca-bundle.pem",
+      "token_file": "/etc/ai-governance/device-token",
+      "git_path": "/usr/bin/git",
+      "log_file": "/var/log/ai-governance/hook-client.log"
+    }
+  },
+  "platform_env": {
+    "windows": {
+      "GIT_CONFIG_VALUE_0": "C:\\Program Files\\AIGovernance\\git-hooks"
+    },
+    "macos": {
+      "GIT_CONFIG_VALUE_0": "/Library/Application Support/AIGovernance/git-hooks"
+    },
+    "linux": {
+      "GIT_CONFIG_VALUE_0": "/usr/local/lib/ai-governance/git-hooks"
     }
   },
   "platform_deny": {

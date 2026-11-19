@@ -18,6 +18,10 @@ policy"):
 Each platform's settings carry the enforcing hooks in the ``hooks`` key, running the
 admin-installed interpreter and client named in ``platform_hook``.
 
+It also writes ``<platform>/aigov-client.json``, the hook client's one configuration file
+(review C1), from ``client`` and ``platform_client``. IT installs it next to the client
+(``platform_hook.client``'s directory), in the admin-owned install directory.
+
 The output is deterministic, so a test can prove the committed files match the source.
 Run ``check_pack.py`` afterwards. Standard library only.
 """
@@ -41,6 +45,9 @@ ARTIFACTS = (
     "macos/com.anthropic.claudecode.mobileconfig",
     "windows/managed-settings.json",
     "windows/ClaudeCode-policy.reg",
+    "linux/aigov-client.json",
+    "macos/aigov-client.json",
+    "windows/aigov-client.json",
 )
 PROFILE_NAMESPACE = uuid.UUID("6f1d8a52-3c4e-4b7a-9d1e-2a5c7e9b0f13")
 
@@ -111,7 +118,12 @@ def build(source: dict[str, Any]) -> dict[str, bytes]:
         )
         for platform in ("windows", "macos", "linux")
     }
+    clients = {
+        f"{platform}/aigov-client.json": json_bytes(checker.client_config(source, platform))
+        for platform in ("linux", "macos", "windows")
+    }
     return {
+        **clients,
         "linux/managed-settings.json": json_bytes(policies["linux"]),
         "macos/managed-settings.json": json_bytes(policies["macos"]),
         "macos/com.anthropic.claudecode.mobileconfig": profile_bytes(policies["macos"]),

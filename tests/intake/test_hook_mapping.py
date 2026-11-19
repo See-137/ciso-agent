@@ -9,6 +9,7 @@ import pytest
 from tests.fakes.core import FakeRedactor
 from tests.intake.conftest import (
     DEVICE_ACTOR,
+    DEVICE_NAME,
     RECEIVED_AT,
     envelope,
     hook_payload_post_write,
@@ -28,7 +29,7 @@ pytestmark = pytest.mark.unit
 
 def normalize(request: dict[str, Any]) -> NormalizedReport:
     return normalize_hook_report(
-        request, device_actor_id=DEVICE_ACTOR, received_at=RECEIVED_AT, redactor=FakeRedactor()
+        request, device_actor_id=DEVICE_ACTOR, device_name=DEVICE_NAME, received_at=RECEIVED_AT, redactor=FakeRedactor()
     )
 
 

@@ -11,6 +11,7 @@ from services.sandbox.job import ArchiveFormat, CheckId, Job
 from services.sandbox.report import validate_wire
 from services.sandbox.runner import BUNDLE_SCRIPT, TAR_SCRIPT, JobRunner
 from services.sandbox.settings import SandboxSettings
+from tests.services.sandbox.bundle_support import FakeRepo, bundle_job
 from tests.services.sandbox.support import FakeBackend, fixture_bytes, image, outcome, tar_of
 
 from ciso.common.clock import FixedClock
@@ -20,7 +21,6 @@ pytestmark = pytest.mark.unit
 SHA = "0123456789abcdef0123456789abcdef01234567"
 ALL = (CheckId.SECRETS, CheckId.CODE, CheckId.TESTS)
 PY_TREE = {"pyproject.toml": b"[project]\n", "tests/test_a.py": b"def test_a(): pass\n"}
-BUNDLE = b"# v2 git bundle\n" + SHA.encode() + b" refs/heads/main\n\nPACK"
 
 
 def tar_job(files: dict[str, bytes] = PY_TREE, checks: tuple[CheckId, ...] = ALL) -> Job:
@@ -42,6 +42,7 @@ def good_backend() -> FakeBackend:
             "semgrep": outcome(0, fixture_bytes("semgrep_report.json")),
             "python": outcome(1, fixture_bytes("pytest_junit_failed.xml")),
             "git": outcome(0, tar_of(PY_TREE)),
+            "verify": FakeRepo(),
         }
     )
 
@@ -108,14 +109,14 @@ def test_scanner_commands_for_a_working_tree(
     assert tests[:3] == ("python", "-m", "pytest")
 
 
-def test_gitleaks_custom_rules_are_passed_when_configured(
+def test_gitleaks_rules_come_from_the_image(
     settings: SandboxSettings, clock: FixedClock, good_backend: FakeBackend
 ) -> None:
-    images = settings.images.model_copy(update={"gitleaks_config": "/rules/gitleaks.toml"})
+    images = settings.images.model_copy(update={"gitleaks_config": "/rules/custom.toml"})
     configured = settings.model_copy(update={"images": images})
     JobRunner(good_backend, configured, clock).run(tar_job(checks=(CheckId.SECRETS,)))
     command = good_backend.specs[0].command
-    assert command[command.index("--config") + 1] == "/rules/gitleaks.toml"
+    assert command[command.index("--config") + 1] == "/rules/custom.toml"
 
 
 @pytest.mark.parametrize(
@@ -154,23 +155,19 @@ def test_no_project_means_tests_skipped_without_a_container(
 def test_bundle_job_scans_history_and_tests_the_head_tree(
     settings: SandboxSettings, clock: FixedClock, good_backend: FakeBackend
 ) -> None:
-    job = Job(
-        job_id="job-2",
-        archive_format=ArchiveFormat.GIT_BUNDLE,
-        archive=BUNDLE,
-        base_ref=SHA,
-        checks=ALL,
-    )
+    job = bundle_job(ALL, base_ref=SHA)
     report = JobRunner(good_backend, settings, clock).run(job).to_wire()
     validate_wire(report)
-    prepare, gitleaks, semgrep, tests = good_backend.specs
+    verify, prepare, gitleaks, tree, semgrep, tests = good_backend.specs
+    assert verify.command == ("verify", SHA)
     assert prepare.image == image("git")
     assert prepare.command == ("git", "archive", "--format=tar", "HEAD")
     assert prepare.script == BUNDLE_SCRIPT
-    assert prepare.stdin == BUNDLE
-    assert gitleaks.script == semgrep.script == BUNDLE_SCRIPT
-    assert gitleaks.stdin == semgrep.stdin == BUNDLE
+    assert prepare.stdin == job.archive
+    assert gitleaks.script == tree.script == semgrep.script == BUNDLE_SCRIPT
+    assert gitleaks.stdin == tree.stdin == semgrep.stdin == job.archive
     assert gitleaks.command[:3] == ("gitleaks", "git", ".")
+    assert tree.command[:3] == ("gitleaks", "dir", ".")
     assert gitleaks.command[gitleaks.command.index("--log-opts") + 1] == f"{SHA}..HEAD"
     assert semgrep.command[semgrep.command.index("--baseline-commit") + 1] == SHA
     assert tests.script == TAR_SCRIPT
@@ -181,28 +178,20 @@ def test_bundle_job_scans_history_and_tests_the_head_tree(
 def test_bundle_without_base_scans_whole_history(
     settings: SandboxSettings, clock: FixedClock, good_backend: FakeBackend
 ) -> None:
-    job = Job(
-        job_id="job-2",
-        archive_format=ArchiveFormat.GIT_BUNDLE,
-        archive=BUNDLE,
-        checks=(CheckId.SECRETS, CheckId.CODE),
-    )
+    job = bundle_job((CheckId.SECRETS, CheckId.CODE), base_ref=None)
+    good_backend.outcomes["verify"] = FakeRepo(whole=job.commits or ())
     JobRunner(good_backend, settings, clock).run(job)
-    gitleaks, semgrep = good_backend.specs
+    _verify, gitleaks, tree, semgrep = good_backend.specs
     assert "--log-opts" not in gitleaks.command
+    assert "--log-opts" not in tree.command
     assert "--baseline-commit" not in semgrep.command
 
 
 def test_bundle_prepare_failure_fails_tests_closed(
     settings: SandboxSettings, clock: FixedClock
 ) -> None:
-    backend = FakeBackend(outcomes={"git": outcome(128, b"")})
-    job = Job(
-        job_id="job-2",
-        archive_format=ArchiveFormat.GIT_BUNDLE,
-        archive=BUNDLE,
-        checks=(CheckId.TESTS,),
-    )
+    backend = FakeBackend(outcomes={"git": outcome(128, b""), "verify": FakeRepo()})
+    job = bundle_job((CheckId.TESTS,))
     check = JobRunner(backend, settings, clock).run(job).to_wire()["checks"][0]
     assert (check["status"], check["findings"][0]["rule"]) == ("error", "sandbox.prepare_failed")
 
@@ -213,16 +202,11 @@ def test_bundle_prepare_output_goes_through_the_same_archive_defenses(
     from tests.services.sandbox.support import tar_with
 
     hostile = tar_with([(tarfile.TarInfo("../x"), b"")])
-    backend = FakeBackend(outcomes={"git": outcome(0, hostile)})
-    job = Job(
-        job_id="job-2",
-        archive_format=ArchiveFormat.GIT_BUNDLE,
-        archive=BUNDLE,
-        checks=(CheckId.TESTS,),
-    )
+    backend = FakeBackend(outcomes={"git": outcome(0, hostile), "verify": FakeRepo()})
+    job = bundle_job((CheckId.TESTS,))
     check = JobRunner(backend, settings, clock).run(job).to_wire()["checks"][0]
     assert (check["status"], check["findings"][0]["rule"]) == ("error", "sandbox.archive_rejected")
-    assert len(backend.specs) == 1
+    assert len(backend.specs) == 2  # the verification and the export, nothing else
 
 
 def test_report_is_json_serialisable_and_has_no_extra_keys(
@@ -235,7 +219,7 @@ def test_report_is_json_serialisable_and_has_no_extra_keys(
 
 def test_scripts_take_no_job_data() -> None:
     for script in (TAR_SCRIPT, BUNDLE_SCRIPT):
-        assert '"$@"' in script
+        assert script.endswith('exec "$@"')
         assert "{" not in script
 
 

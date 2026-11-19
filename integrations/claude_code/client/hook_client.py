@@ -16,28 +16,37 @@ decide  POST /v1/governance/decide before an action. ``deny`` and ``ask`` become
         change must be scanned first) is followed here: the client builds the change
         with git in the hook's working directory, uploads it to POST /v1/changes and
         asks decide again with ``change_id`` and ``change_head``; that second answer is
-        the one applied. Any failure on the way blocks. The whole run stays inside
-        AIGOV_HOOK_DEADLINE_SECONDS.
+        the one applied. Any failure on the way blocks. The whole run stays inside the
+        configured hook deadline.
 report  POST /v1/activity after something happened. Never blocks: one retry, then a
         local log line and exit 0.
 
-Configuration comes only from environment variables that the managed policy pack sets
-through the managed settings ``env`` block (managed values override the user's shell):
+Configuration (review C1). Nothing that decides where the client connects, whom it
+trusts or which git it runs comes from the environment: the environment is the
+engineer's (their shell, ``setx``, a wrapper) and reaches every command the agent runs.
+The client reads ONE JSON file at a fixed path next to itself, ``aigov-client.json`` in
+the admin-owned install directory, and refuses to run (decide blocks, report drops) when
+that file is missing, malformed, or writable by the user running the hook
+(``user_can_write``: best effort per operating system, see its docstring). Keys, all
+required (``CONFIG_KEYS``)::
 
-    AIGOV_SERVICE_URL              base URL; https, or http to localhost/127.0.0.1 only
-    AIGOV_DEVICE_TOKEN_FILE        path of the file holding the device token
-    AIGOV_DECIDE_TIMEOUT_SECONDS   network timeout in decide mode (no default: unset blocks)
-    AIGOV_REPORT_TIMEOUT_SECONDS   network timeout in report mode (no default: unset drops)
-    AIGOV_CA_BUNDLE                optional CA bundle (PEM) to verify the service
-    AIGOV_SURFACE                  optional surface label, default "cli"
-    AIGOV_LOG_FILE                 optional local log path
-    AIGOV_GIT_PATH                 absolute path of the admin-installed git (pre-push;
-                                   unset: a push or commit that needs a scan blocks)
-    AIGOV_HOOK_DEADLINE_SECONDS    the client's whole time budget, below the hook's own
-                                   timeout (pre-push; unset: such a push blocks)
+    service_url              https URL (plain http only to localhost/127.0.0.1)
+    ca_bundle                absolute path of the PEM bundle that verifies the service;
+                             the ONLY trust anchors used (null only for loopback http)
+    token_file               absolute path of the file holding the device token
+    decide_timeout_seconds   network timeout in decide mode
+    report_timeout_seconds   network timeout in report mode
+    hook_deadline_seconds    the client's whole time budget, below the hook's timeout
+    git_path                 absolute path of the admin-installed git (pre-push)
+    git_hooks_dir            the empty hooks directory the managed env names (pre-push:
+                             the hook's GIT_* variables must be exactly the pack's)
+    surface                  surface label, for example "cli"
+    log_file                 absolute path of the local log (no content is logged)
 
-The device token is read from a file, never from the environment (the environment
-reaches every command the agent runs), and is never printed or logged.
+No proxy is ever used (an explicit empty proxy handler: neither ``HTTPS_PROXY`` nor the
+Windows registry proxy), and the TLS context loads the configured bundle only (never
+``SSL_CERT_FILE``, ``SSL_CERT_DIR`` or the system store). The device token is read from
+its file and is never printed or logged.
 
 Standard library only. Targets Python 3.10 and later.
 """
@@ -45,6 +54,7 @@ Standard library only. Targets Python 3.10 and later.
 from __future__ import annotations
 
 import base64
+import contextlib
 import getpass
 import json
 import math
@@ -52,6 +62,7 @@ import os
 import re
 import socket
 import ssl
+import stat
 import subprocess
 import sys
 import tempfile
@@ -59,6 +70,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -70,8 +82,9 @@ from typing import IO, Any, Protocol
 MAX_REQUEST_BYTES = 256 * 1024
 MAX_RESPONSE_BYTES = 64 * 1024
 MAX_TOKEN_BYTES = 4096
+MAX_CONFIG_BYTES = 16 * 1024
 MAX_MESSAGE_CHARS = 1000
-#: Upper bound accepted for a configured network timeout, in seconds.
+#: Upper bound accepted for a configured timeout or deadline, in seconds.
 MAX_TIMEOUT_SECONDS = 600.0
 
 #: Pre-push bounds. The bundle bound is the sandbox's archive bound (32 MiB); the request
@@ -81,6 +94,9 @@ MAX_DIFF_BYTES = 4 * 1024 * 1024
 MAX_CHANGE_COMMITS = 1000
 MAX_CHANGE_REQUEST_BYTES = ((MAX_BUNDLE_BYTES + MAX_DIFF_BYTES + 2) // 3) * 4 + 128 * 1024
 MAX_GIT_OUTPUT_BYTES = MAX_DIFF_BYTES
+#: Most approved bases the service lists for one repository and branch.
+MAX_BASES = 64
+MAX_REPOSITORY_CHARS = 512
 #: Longest any single git step may take, inside the deadline.
 GIT_STEP_SECONDS = 10.0
 #: Kept back from the deadline for printing the answer; a step needs at least MIN_STEP.
@@ -89,9 +105,27 @@ MIN_STEP_SECONDS = 0.2
 
 DECIDE_PATH = "/v1/governance/decide"
 CHANGES_PATH = "/v1/changes"
+BASES_PATH = "/v1/changes/bases"
 ACTIVITY_PATH = "/v1/activity"
 REQUEST_FORMAT = "assistant_hook_v1"
-DEFAULT_SURFACE = "cli"
+
+CONFIG_FILE_NAME = "aigov-client.json"
+#: The one configuration file: next to this script, in the admin-owned install directory.
+DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent / CONFIG_FILE_NAME
+CONFIG_KEYS = frozenset(
+    {
+        "service_url",
+        "ca_bundle",
+        "token_file",
+        "decide_timeout_seconds",
+        "report_timeout_seconds",
+        "hook_deadline_seconds",
+        "git_path",
+        "surface",
+        "log_file",
+        "git_hooks_dir",
+    }
+)
 
 BLOCK_MESSAGE = (
     "Blocked: the company AI-governance check could not be completed. "
@@ -103,16 +137,28 @@ PREPUSH_BLOCK_MESSAGE = (
     "stopped. Push one branch at a time with a plain git command, or ask your IT or "
     "security contact if this continues."
 )
-
-ENV_URL = "AIGOV_SERVICE_URL"
-ENV_TOKEN_FILE = "AIGOV_DEVICE_TOKEN_FILE"  # noqa: S105 - a variable name, not a secret
-ENV_DECIDE_TIMEOUT = "AIGOV_DECIDE_TIMEOUT_SECONDS"
-ENV_REPORT_TIMEOUT = "AIGOV_REPORT_TIMEOUT_SECONDS"
-ENV_CA_BUNDLE = "AIGOV_CA_BUNDLE"
-ENV_SURFACE = "AIGOV_SURFACE"
-ENV_LOG_FILE = "AIGOV_LOG_FILE"
-ENV_GIT = "AIGOV_GIT_PATH"
-ENV_DEADLINE = "AIGOV_HOOK_DEADLINE_SECONDS"
+#: Fixed messages for pre-push refusals the engineer can act on (by ClientError code).
+PREPUSH_MESSAGES = {
+    "push_config": (
+        "Blocked: this repository's git configuration changes where or how pushed data "
+        "goes (a push URL, receive-pack, ssh command, pushInsteadOf, push refspec or "
+        "mirror setting, or a git transport variable), so the pushed commits cannot be "
+        "tied to the scanned ones. The agent may not push here; push it yourself."
+    ),
+    "too_many_unscanned": (
+        "Blocked: this push carries more than 1000 commits that the company AI-governance "
+        "service has not scanned before, so it cannot be scanned in one go. Push it "
+        "yourself, or ask your IT or security contact."
+    ),
+    "device_busy": (
+        "Held: another push from this machine is still being scanned. Retry this push "
+        "in a minute; only one push per machine is scanned at a time."
+    ),
+    "shallow_repository": (
+        "Blocked: this is a shallow clone, so its history cannot be scanned completely. "
+        "Fetch the full history (git fetch --unshallow) or push it yourself."
+    ),
+}
 
 LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1"})
 VERDICTS = frozenset({"allow", "deny", "ask"})
@@ -128,6 +174,29 @@ _COMMIT_RE = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
 _REF_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,199}")
 _REMOTE_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
 _CHANGE_ID_RE = re.compile(r"chg_[0-9A-HJKMNP-TV-Z]{26}")
+_URL_USERINFO_RE = re.compile(r"^([A-Za-z][A-Za-z0-9+.-]*://)[^/@]*@")
+#: Windows `FILE_ATTRIBUTE_READONLY` (the user can clear it, so it proves nothing).
+_READONLY_ATTRIBUTE = 0x1
+#: Environment variables that change how the agent's own `git push` transports data.
+#: The git configuration the managed pack's ``env`` gives the agent's own git (review H2,
+#: queue Q16), in index order: ``GIT_CONFIG_KEY_n`` / ``GIT_CONFIG_VALUE_n``. None is the
+#: admin-owned empty hooks directory, named by the configuration file's ``git_hooks_dir``.
+#: ``managed/check_pack.py`` keeps the same table (a test pins the two together).
+MANAGED_GIT_CONFIG: tuple[tuple[str, str | None], ...] = (
+    ("core.hooksPath", None),
+    ("safe.bareRepository", "explicit"),
+    ("push.recurseSubmodules", "no"),
+    ("protocol.ext.allow", "never"),
+)
+
+
+def managed_git_env(hooks_dir: str) -> dict[str, str]:
+    """Exactly the ``GIT_*`` variables the managed pack sets, for this machine."""
+    env = {"GIT_CONFIG_COUNT": str(len(MANAGED_GIT_CONFIG))}
+    for index, (key, value) in enumerate(MANAGED_GIT_CONFIG):
+        env[f"GIT_CONFIG_KEY_{index}"] = key
+        env[f"GIT_CONFIG_VALUE_{index}"] = hooks_dir if value is None else value
+    return env
 
 
 class ClientError(Exception):
@@ -164,8 +233,17 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
+def make_opener(context: ssl.SSLContext | None) -> urllib.request.OpenerDirector:
+    """No proxy (an explicit empty handler, so urllib never reads ``*_PROXY`` or the
+    registry), no redirects, and the given TLS context."""
+    handlers: list[Any] = [urllib.request.ProxyHandler({}), _NoRedirect()]
+    if context is not None:
+        handlers.append(urllib.request.HTTPSHandler(context=context))
+    return urllib.request.build_opener(*handlers)
+
+
 class UrllibTransport:
-    """The real transport: urllib, certificate verification, no redirects."""
+    """The real transport: urllib, certificate verification, no proxy, no redirects."""
 
     def post(
         self,
@@ -175,10 +253,7 @@ class UrllibTransport:
         timeout: float,
         context: ssl.SSLContext | None,
     ) -> HttpResponse:
-        handlers: list[Any] = [_NoRedirect()]
-        if context is not None:
-            handlers.append(urllib.request.HTTPSHandler(context=context))
-        opener = urllib.request.build_opener(*handlers)
+        opener = make_opener(context)
         request = urllib.request.Request(url, data=body, headers=dict(headers), method="POST")  # noqa: S310 - scheme checked in validate_service_url
         try:
             with opener.open(request, timeout=timeout) as response:
@@ -189,12 +264,31 @@ class UrllibTransport:
 
 
 @dataclass(frozen=True)
+class FileConfig:
+    """The parsed configuration file. Paths are checked when they are used."""
+
+    service_url: str
+    ca_bundle: str | None
+    token_file: str
+    decide_timeout: float
+    report_timeout: float
+    hook_deadline: float
+    git_path: str
+    surface: str
+    log_file: str
+    git_hooks_dir: str
+
+
+@dataclass(frozen=True)
 class ClientConfig:
     service_url: str
     token: str
     timeout: float
     context: ssl.SSLContext | None
     surface: str
+    git_path: str
+    hook_deadline: float
+    git_hooks_dir: str
 
     def __repr__(self) -> str:  # never show the token
         return f"ClientConfig(service_url={self.service_url!r}, timeout={self.timeout})"
@@ -217,12 +311,135 @@ class HookOutput:
 # --- configuration ---------------------------------------------------------------------
 
 
-def validate_service_url(raw: str) -> str:
+def _windows_probe(path: Path) -> bool:
+    """True unless both probes are refused by the operating system.
+
+    Checks: (1) the file can be opened for appending (nothing is written, so neither the
+    content nor the modification time changes); (2) a new file can be created in its
+    directory (an exclusive create of a random name, removed at once). Cannot check:
+    whether the user may change the ACL or take ownership (WRITE_DAC, WRITE_OWNER),
+    whether a parent directory can be renamed, or a file the read-only attribute
+    protects (that attribute is the user's to clear, so it counts as writable here).
+    """
+    try:
+        attributes = int(getattr(os.stat(path), "st_file_attributes", 0))
+    except OSError:
+        return True
+    if attributes & _READONLY_ATTRIBUTE:
+        return True
+    try:
+        with path.open("ab"):
+            return True
+    except PermissionError:
+        pass
+    except OSError:
+        return True
+    probe = path.parent / f".aigov-probe-{uuid.uuid4().hex}"
+    try:
+        handle = os.open(probe, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except PermissionError:
+        return False
+    except OSError:
+        return True
+    os.close(handle)
+    with contextlib.suppress(OSError):
+        probe.unlink()
+    return True
+
+
+def _posix_writable(path: Path) -> bool:
+    """True when the current user can write the file or its directory, or when the file
+    or any directory above it is owned by the user (who could change its mode) or is
+    writable by group or others (who may include the user)."""
+    if os.access(path, os.W_OK) or os.access(path.parent, os.W_OK):
+        return True
+    me = os.geteuid() if hasattr(os, "geteuid") else -1
+    for item in (path, *path.parents):
+        try:
+            info = os.stat(item)
+        except OSError:
+            return True
+        if (me != 0 and info.st_uid == me) or info.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+            return True
+    return False
+
+
+def user_can_write(path: Path) -> bool:
+    """Best effort: True when the user running the hook could change or replace `path`.
+
+    POSIX: `os.access` on the file and its directory, then the owner and the group/other
+    write bits of the file and every directory up to `/`. Windows: two probes the
+    operating system answers from the real ACL (see `_windows_probe`). An error counts as
+    writable (fail closed).
+    """
+    if sys.platform == "win32":
+        return _windows_probe(path)
+    return _posix_writable(path)
+
+
+Writable = Callable[[Path], bool]
+
+
+def _number(value: Any, code: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ClientError(code)
+    number = float(value)
+    if not math.isfinite(number) or number <= 0 or number > MAX_TIMEOUT_SECONDS:
+        raise ClientError(code)
+    return number
+
+
+def _absolute_text(value: Any, code: str) -> str:
+    if not isinstance(value, str) or not value or not Path(value).is_absolute():
+        raise ClientError(code)
+    return value
+
+
+def read_file_config(path: Path, writable: Writable) -> FileConfig:
+    """The configuration file, or ClientError. See the module docstring."""
+    try:
+        with path.open("rb") as handle:
+            data = handle.read(MAX_CONFIG_BYTES + 1)
+    except OSError as error:
+        raise ClientError("no_config_file") from error
+    if writable(path):
+        raise ClientError("config_writable")
+    if len(data) > MAX_CONFIG_BYTES:
+        raise ClientError("bad_config")
+    try:
+        raw = json.loads(data.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError) as error:
+        raise ClientError("bad_config") from error
+    if not isinstance(raw, dict) or set(raw) != CONFIG_KEYS:
+        raise ClientError("bad_config")
+    surface = raw["surface"]
+    if not isinstance(surface, str) or not _SURFACE_RE.fullmatch(surface):
+        raise ClientError("bad_config")
+    ca_bundle = raw["ca_bundle"]
+    if ca_bundle is not None:
+        ca_bundle = _absolute_text(ca_bundle, "bad_config")
+    return FileConfig(
+        service_url=validate_service_url(raw["service_url"]),
+        ca_bundle=ca_bundle,
+        token_file=_absolute_text(raw["token_file"], "bad_config"),
+        decide_timeout=_number(raw["decide_timeout_seconds"], "bad_timeout"),
+        report_timeout=_number(raw["report_timeout_seconds"], "bad_timeout"),
+        hook_deadline=_number(raw["hook_deadline_seconds"], "bad_timeout"),
+        git_path=_absolute_text(raw["git_path"], "bad_config"),
+        surface=surface,
+        log_file=_absolute_text(raw["log_file"], "bad_config"),
+        git_hooks_dir=_absolute_text(raw["git_hooks_dir"], "bad_config"),
+    )
+
+
+def validate_service_url(raw: Any) -> str:
     """Return the base URL without a trailing slash, or raise.
 
     https is required; plain http only to localhost or 127.0.0.1. No credentials, query
     or fragment in the URL.
     """
+    if not isinstance(raw, str):
+        raise ClientError("bad_url")
     parsed = urllib.parse.urlsplit(raw.strip())
     if parsed.scheme not in ("https", "http") or not parsed.hostname:
         raise ClientError("bad_url")
@@ -233,18 +450,6 @@ def validate_service_url(raw: str) -> str:
     if parsed.scheme == "http" and parsed.hostname not in LOOPBACK_HOSTS:
         raise ClientError("plain_http_refused")
     return urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, parsed.path.rstrip("/"), "", ""))
-
-
-def parse_timeout(raw: str | None) -> float:
-    if raw is None:
-        raise ClientError("no_timeout")
-    try:
-        value = float(raw)
-    except ValueError as error:
-        raise ClientError("bad_timeout") from error
-    if not math.isfinite(value) or value <= 0 or value > MAX_TIMEOUT_SECONDS:
-        raise ClientError("bad_timeout")
-    return value
 
 
 def read_token(path_text: str | None) -> str:
@@ -266,28 +471,40 @@ def read_token(path_text: str | None) -> str:
     return token
 
 
-def tls_context(url: str, ca_bundle: str | None) -> ssl.SSLContext | None:
+def tls_context(url: str, ca_bundle: str | None, writable: Writable) -> ssl.SSLContext | None:
+    """The configured bundle and nothing else: no system store, no ``SSL_CERT_FILE`` or
+    ``SSL_CERT_DIR`` (``load_default_certs`` and ``set_default_verify_paths`` are never
+    called). A bundle the user can write is refused like a missing one."""
     if not url.startswith("https://"):
         return None
-    if ca_bundle:
-        if not Path(ca_bundle).is_file():
-            raise ClientError("ca_bundle_missing")
-        return ssl.create_default_context(cafile=ca_bundle)
-    return ssl.create_default_context()
+    if not ca_bundle or not Path(ca_bundle).is_file():
+        raise ClientError("ca_bundle_missing")
+    if writable(Path(ca_bundle)):
+        raise ClientError("ca_bundle_writable")
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
+    context.check_hostname = True
+    context.verify_mode = ssl.CERT_REQUIRED
+    try:
+        context.load_verify_locations(cafile=ca_bundle)
+    except (OSError, ssl.SSLError) as error:
+        raise ClientError("ca_bundle_invalid") from error
+    return context
 
 
-def load_config(environ: Mapping[str, str], timeout_variable: str) -> ClientConfig:
-    raw_url = environ.get(ENV_URL)
-    if not raw_url:
-        raise ClientError("no_service_url")
-    url = validate_service_url(raw_url)
-    timeout = parse_timeout(environ.get(timeout_variable))
-    token = read_token(environ.get(ENV_TOKEN_FILE))
-    context = tls_context(url, environ.get(ENV_CA_BUNDLE))
-    surface = environ.get(ENV_SURFACE, DEFAULT_SURFACE)
-    if not _SURFACE_RE.fullmatch(surface):
-        surface = DEFAULT_SURFACE
-    return ClientConfig(url, token, timeout, context, surface)
+def load_config(file: FileConfig, timeout: float, writable: Writable) -> ClientConfig:
+    token = read_token(file.token_file)
+    context = tls_context(file.service_url, file.ca_bundle, writable)
+    return ClientConfig(
+        file.service_url,
+        token,
+        timeout,
+        context,
+        file.surface,
+        file.git_path,
+        file.hook_deadline,
+        file.git_hooks_dir,
+    )
 
 
 # --- request ---------------------------------------------------------------------------
@@ -299,7 +516,8 @@ def os_account_claim(
     """The logged-in operating-system account, as read on this machine. Never verified.
 
     Windows: ``DOMAIN\\user`` from USERDOMAIN and USERNAME. Elsewhere: the account name
-    from the password database (``getuser``). The service decides what it is worth.
+    from the password database (``getuser``). The service decides what it is worth: it
+    counts only through the device's assignments (review H4).
     """
     subject = ""
     if is_windows:
@@ -342,14 +560,21 @@ def parse_hook_input(raw: bytes) -> dict[str, Any]:
 
 
 def build_body(
-    payload: dict[str, Any], config: ClientConfig, device: str, claim: dict[str, Any] | None
+    payload: dict[str, Any],
+    config: ClientConfig,
+    device: str,
+    claim: dict[str, Any] | None,
+    report_id: str,
 ) -> bytes:
+    """The envelope. `report_id` is made once per hook run and reused on its retry and on
+    the second decide (queue Q12)."""
     body = {
         "format": REQUEST_FORMAT,
         "event": payload["hook_event_name"],
         "surface": config.surface,
         "device": device,
         "claims": [claim] if claim else [],
+        "report_id": report_id,
         "payload": payload,
     }
     data = json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
@@ -457,15 +682,15 @@ def block_output(event: str | None, message: str = BLOCK_MESSAGE) -> HookOutput:
 # --- local log -------------------------------------------------------------------------
 
 
-def log_line(environ: Mapping[str, str], mode: str, event: str, outcome: str) -> None:
+def log_line(path_text: str | None, mode: str, event: str, outcome: str) -> None:
     """Append one line: time, mode, event, outcome code. Never content, never the token.
 
-    A log that cannot be written must not change the hook's outcome, so write errors
+    Only the configured log file is used; before the configuration is read there is no
+    log. A log that cannot be written must not change the hook's outcome, so write errors
     are dropped here on purpose.
     """
-    path_text = environ.get(ENV_LOG_FILE) or str(
-        Path(environ.get("CLAUDE_PLUGIN_DATA") or os.environ.get("TEMP", "/tmp")) / "aigov-hook.log"  # noqa: S108
-    )
+    if not path_text:
+        return
     stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     line = f"{stamp} mode={mode} event={event or '-'} outcome={outcome}\n"
     try:
@@ -562,9 +787,32 @@ def parse_needs_change(response: HttpResponse) -> NeedsChange | None:
     return NeedsChange(str(kind), names[0], names[1], names[2])
 
 
+#: Options that make the client's git show exactly the objects and lines being pushed
+#: (review M3): no replace refs, no relative or prefix-less diff, no external diff, no
+#: rename or copy shortcuts (every added line is printed), and no program the repository
+#: names (fsmonitor, hooks, protocols).
+GIT_SAFE_OPTIONS = (
+    "--no-pager", "--no-optional-locks", "--no-replace-objects",
+    "-c", "core.fsmonitor=false", "-c", "diff.external=", "-c", "protocol.allow=never",
+    "-c", "diff.relative=false", "-c", "diff.noprefix=false", "-c", "diff.mnemonicPrefix=false",
+    "-c", "diff.renames=false", "-c", "core.quotePath=true",
+)  # fmt: skip
+#: Configuration the hook's environment may add for the agent's own git (read back when
+#: the effective push configuration is checked).
+_CONFIG_ENV_RE = re.compile(
+    r"GIT_CONFIG_(COUNT|KEY_\d+|VALUE_\d+|PARAMETERS|GLOBAL|SYSTEM|NOSYSTEM)"
+)
+
+
 class Git:
     """git in the hook's working directory, with options that keep the repository's own
-    configuration from running programs (fsmonitor, external diff, textconv, hooks)."""
+    configuration from running programs or changing what the diff and bundle show.
+
+    Two environments: `isolated` (no system or global configuration, no replace objects)
+    for everything that builds the change, and `effective` (what the agent's own `git
+    push` will see: system, global, repository and environment configuration) for the
+    push configuration check only.
+    """
 
     def __init__(
         self,
@@ -573,26 +821,34 @@ class Git:
         cwd: str,
         budget: Budget,
         environ: Mapping[str, str],
-        nohooks: str,
+        scratch: str,
     ) -> None:
         self._runner = runner
         self._cwd = cwd
         self._budget = budget
-        self._prefix = [
-            executable, "--no-pager", "--no-optional-locks",
-            "-c", "core.fsmonitor=false", "-c", "core.hooksPath=" + nohooks,
-            "-c", "diff.external=", "-c", "protocol.allow=never",
-        ]  # fmt: skip
-        self.env = {k: v for k, v in environ.items() if not k.upper().startswith("GIT_")}
-        self.env.update({"GIT_TERMINAL_PROMPT": "0", "GIT_OPTIONAL_LOCKS": "0", "LC_ALL": "C"})
+        nohooks = str(Path(scratch) / "no-hooks")
+        self._prefix = [executable, *GIT_SAFE_OPTIONS, "-c", "core.hooksPath=" + nohooks]
+        base = {k: v for k, v in environ.items() if not k.upper().startswith("GIT_")}
+        base.update({"GIT_TERMINAL_PROMPT": "0", "GIT_OPTIONAL_LOCKS": "0", "LC_ALL": "C"})
+        empty = Path(scratch) / "empty-gitconfig"
+        empty.write_bytes(b"")
+        self.env = {
+            **base,
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_CONFIG_GLOBAL": str(empty),
+            "GIT_NO_REPLACE_OBJECTS": "1",
+        }
+        passed = {k: v for k, v in environ.items() if _CONFIG_ENV_RE.fullmatch(k.upper())}
+        self.effective_env = {**base, **passed}
 
-    def raw(self, *args: str, cwd: str | None = None) -> GitResult:
+    def raw(self, *args: str, cwd: str | None = None, effective: bool = False) -> GitResult:
         argv = [*self._prefix, *args]
         timeout = self._budget.timeout(GIT_STEP_SECONDS)
-        return self._runner.run(argv, cwd or self._cwd, timeout, self.env)
+        env = self.effective_env if effective else self.env
+        return self._runner.run(argv, cwd or self._cwd, timeout, env)
 
-    def out(self, *args: str, code: str, cwd: str | None = None) -> str:
-        result = self.raw(*args, cwd=cwd)
+    def out(self, *args: str, code: str, cwd: str | None = None, effective: bool = False) -> str:
+        result = self.raw(*args, cwd=cwd, effective=effective)
         if result.returncode != 0 or len(result.stdout) > MAX_GIT_OUTPUT_BYTES:
             raise ClientError(code)
         return result.stdout.decode("utf-8", errors="replace").strip()
@@ -605,18 +861,76 @@ class Git:
         return text
 
 
-def _base(git: Git, needs: NeedsChange, head: str) -> str:
-    """Where the pushed range starts: the merge base with the remote branch, else with
-    the remote's default branch."""
-    candidates = [f"refs/remotes/{needs.remote}/{needs.branch}"]
-    candidates += [f"refs/remotes/{needs.remote}/{name}" for name in ("HEAD", "main", "master")]
-    for ref in candidates:
-        if git.commit_of(ref) is None:
+def check_git_environment(environ: Mapping[str, str], hooks_dir: str) -> None:
+    """Refuse (``push_config``) unless the hook's ``GIT_*`` variables are exactly the ones
+    the managed pack sets (``managed_git_env``): any other one (``GIT_DIR``,
+    ``GIT_SSH_COMMAND``, ``GIT_EXEC_PATH``, ``GIT_CONFIG_GLOBAL``, an extra
+    ``GIT_CONFIG_KEY_n``...) or a changed or missing value changes what the agent's own
+    `git push` does, so the pushed commits could differ from the scanned ones."""
+    found = {k.upper(): v for k, v in environ.items() if k.upper().startswith("GIT_")}
+    if found != managed_git_env(hooks_dir):
+        raise ClientError("push_config")
+
+
+def check_push_config(git: Git, remote: str, environ: Mapping[str, str]) -> None:
+    """Refuse (``push_config``) when the configuration the agent's `git push` will read
+    changes where or how the pushed data goes (reviews H2, Q17): `remote.<r>.pushurl`,
+    `.receivepack`, `.push`, `.mirror`, `core.sshCommand`, any `url.*.pushInsteadOf`, or
+    a transport variable in the hook's environment."""
+    pattern = (
+        r"^(remote\." + re.escape(remote) + r"\.(pushurl|receivepack|push|mirror)"
+        r"|core\.sshcommand|url\..*\.pushinsteadof)$"
+    )
+    result = git.raw("config", "--get-regexp", pattern, effective=True)
+    if result.returncode == 0:
+        raise ClientError("push_config")
+    if result.returncode != 1:
+        raise ClientError("config_unreadable")
+
+
+def repository_url(git: Git, remote: str) -> str:
+    """The push URL of `remote` as git resolves it, without any `user[:password]@`."""
+    url = git.out("remote", "get-url", "--push", remote, code="no_remote_url", effective=True)
+    url = _URL_USERINFO_RE.sub(r"\1", url)
+    if not url or len(url) > MAX_REPOSITORY_CHARS or _CONTROL_RE.search(url):
+        raise ClientError("no_remote_url")
+    return url
+
+
+def fetch_bases(
+    config: ClientConfig, ctx: PrepushContext, repository: str, branch: str
+) -> list[str]:
+    """The heads the service has approved for this repository and branch (review H1)."""
+    body = json.dumps({"repository": repository, "branch": branch}).encode("utf-8")
+    response = ctx.transport.post(
+        config.service_url + BASES_PATH, body, headers_for(config),
+        ctx.budget.timeout(config.timeout), config.context,
+    )  # fmt: skip
+    if response.status != 200 or len(response.body) > MAX_RESPONSE_BYTES:
+        raise ClientError(f"bases_status_{response.status}")
+    try:
+        bases = json.loads(response.body.decode("utf-8")).get("bases")
+    except (UnicodeDecodeError, ValueError, AttributeError) as error:
+        raise ClientError("bad_bases") from error
+    if not isinstance(bases, list) or len(bases) > MAX_BASES:
+        raise ClientError("bad_bases")
+    if not all(isinstance(b, str) and _COMMIT_RE.fullmatch(b) for b in bases):
+        raise ClientError("bad_bases")
+    return bases
+
+
+def choose_base(git: Git, bases: list[str], head: str) -> str | None:
+    """The first approved base that is a commit here and an ancestor of `head`; None
+    (scan from the root) when there is none. Local remote-tracking refs play no part."""
+    for base in bases:
+        if base == head or git.commit_of(base) is None:
             continue
-        base = git.out("merge-base", head, ref, code="no_merge_base")
-        if _COMMIT_RE.fullmatch(base):
+        result = git.raw("merge-base", "--is-ancestor", base, head)
+        if result.returncode == 0:
             return base
-    raise ClientError("no_base")
+        if result.returncode != 1:
+            raise ClientError("merge_base_failed")
+    return None
 
 
 def _bundle(git: Git, tmp: str, head: str) -> bytes:
@@ -645,8 +959,12 @@ def _bundle(git: Git, tmp: str, head: str) -> bytes:
     return data
 
 
-def _diff(git: Git, *args: str) -> bytes:
-    result = git.raw("diff", "--no-ext-diff", "--no-textconv", "--no-color", *args)
+def _diff(git: Git, top: str, *args: str) -> bytes:
+    """`git diff` from the repository's top level, so a relative diff cannot hide files
+    outside the hook's directory."""
+    result = git.raw(
+        "diff", "--no-ext-diff", "--no-textconv", "--no-color", "--no-renames", *args, cwd=top
+    )
     if result.returncode != 0:
         raise ClientError("diff_failed")
     if len(result.stdout) > MAX_DIFF_BYTES:
@@ -654,34 +972,77 @@ def _diff(git: Git, *args: str) -> bytes:
     return result.stdout
 
 
-def build_change(git: Git, needs: NeedsChange, tmp: str) -> dict[str, Any]:
-    """The upload body (without session_id) for ``needs``. Any failure raises."""
+def _top(git: Git) -> str:
+    top = git.out("rev-parse", "--show-toplevel", code="no_toplevel")
+    if not top or not Path(top).is_absolute() or not Path(top).is_dir():
+        raise ClientError("no_toplevel")
+    return top
+
+
+def _commit_change(git: Git, top: str) -> dict[str, Any]:
+    tree = git.out("write-tree", code="write_tree")
+    if not _COMMIT_RE.fullmatch(tree):
+        raise ClientError("write_tree")
+    diff = _diff(git, top, "--cached")
+    return {"kind": "commit", "head": tree, "base": git.commit_of("HEAD"),
+            "diff_b64": base64.b64encode(diff).decode("ascii")}  # fmt: skip
+
+
+def _range(git: Git, base: str | None, head: str) -> list[str]:
+    """`rev-list base..head`, or the whole history of `head` when there is no base."""
+    span = f"{base}..{head}" if base is not None else head
+    listed = git.out("rev-list", f"--max-count={MAX_CHANGE_COMMITS + 1}", span,
+                     code="rev_list").split()  # fmt: skip
+    if not listed:
+        raise ClientError("nothing_to_push")
+    if not all(_COMMIT_RE.fullmatch(c) for c in listed):
+        raise ClientError("rev_list")
+    if len(listed) > MAX_CHANGE_COMMITS:
+        raise ClientError("too_many_commits" if base is not None else "too_many_unscanned")
+    return listed
+
+
+def build_change(
+    git: Git,
+    needs: NeedsChange,
+    tmp: str,
+    bases: Callable[[str, str], list[str]],
+    environ: Mapping[str, str],
+    hooks_dir: str,
+) -> dict[str, Any]:
+    """The upload body (without session_id) for ``needs``. Any failure raises.
+
+    `bases(repository, branch)` asks the service for its approved heads."""
     if needs.kind == "commit":
-        tree = git.out("write-tree", code="write_tree")
-        if not _COMMIT_RE.fullmatch(tree):
-            raise ClientError("write_tree")
-        diff = _diff(git, "--cached")
-        return {"kind": "commit", "head": tree, "base": git.commit_of("HEAD"),
-                "diff_b64": base64.b64encode(diff).decode("ascii")}  # fmt: skip
+        return _commit_change(git, _top(git))
     if needs.remote is None or needs.branch is None:
         # Only a push that names its remote and branch is scanned: without them,
         # configuration (push.default, remote.<name>.push, .mirror) decides what is sent.
         raise ClientError("push_names_no_branch")
+    top = _top(git)
+    check_git_environment(environ, hooks_dir)
+    check_push_config(git, needs.remote, environ)
+    if git.out("rev-parse", "--is-shallow-repository", code="git_dir") != "false":
+        raise ClientError("shallow_repository")
     ref = "HEAD" if needs.source is None else "refs/heads/" + needs.source
     head = git.commit_of(ref)
     if head is None:
         raise ClientError("no_source_commit")
-    base = _base(git, needs, head)
-    listed = git.out("rev-list", f"--max-count={MAX_CHANGE_COMMITS + 1}", f"{base}..{head}",
-                     code="rev_list").split()  # fmt: skip
-    if not listed:
-        raise ClientError("nothing_to_push")
-    if len(listed) > MAX_CHANGE_COMMITS or not all(_COMMIT_RE.fullmatch(c) for c in listed):
-        raise ClientError("too_many_commits")
+    repository = repository_url(git, needs.remote)
+    base = choose_base(git, bases(repository, needs.branch), head)
+    listed = _range(git, base, head)
+    if base is None:
+        empty = git.out("hash-object", "-t", "tree", "--stdin", code="empty_tree")
+        if not _COMMIT_RE.fullmatch(empty):
+            raise ClientError("empty_tree")
+        diff = _diff(git, top, empty, head)
+    else:
+        diff = _diff(git, top, base, head)
     return {
-        "kind": "push", "remote": needs.remote, "branch": needs.branch, "source": needs.source,
+        "kind": "push", "repository": repository, "remote": needs.remote,
+        "branch": needs.branch, "source": needs.source,
         "head": head, "base": base, "commits": listed,
-        "diff_b64": base64.b64encode(_diff(git, base, head)).decode("ascii"),
+        "diff_b64": base64.b64encode(diff).decode("ascii"),
         "bundle_b64": base64.b64encode(_bundle(git, tmp, head)).decode("ascii"),
     }  # fmt: skip
 
@@ -694,12 +1055,14 @@ class PrepushContext:
     budget: Budget
 
 
-def git_executable(environ: Mapping[str, str]) -> str:
-    """The admin-installed git named by the managed environment: absolute, a file. A bare
-    ``git`` would be looked up in PATH or the agent's working directory."""
-    path = environ.get(ENV_GIT)
+def git_executable(path: str, writable: Writable) -> str:
+    """The admin-installed git named by the configuration file: absolute, a file, and not
+    writable by the user. A bare ``git`` would be looked up in PATH or the agent's
+    working directory."""
     if not path or not Path(path).is_absolute() or not Path(path).is_file():
         raise ClientError("no_git_path")
+    if writable(Path(path)):
+        raise ClientError("git_writable")
     return path
 
 
@@ -711,15 +1074,22 @@ def hook_cwd(payload: Mapping[str, Any]) -> str:
 
 
 def upload_change(
-    payload: Mapping[str, Any], config: ClientConfig, needs: NeedsChange, ctx: PrepushContext
+    payload: Mapping[str, Any],
+    config: ClientConfig,
+    needs: NeedsChange,
+    ctx: PrepushContext,
+    writable: Writable,
 ) -> tuple[str, str]:
     """Build and upload the change; returns (change_id, head)."""
-    executable = git_executable(ctx.environ)
+    executable = git_executable(config.git_path, writable)
     cwd = hook_cwd(payload)
     with tempfile.TemporaryDirectory(prefix="aigov-") as tmp:
-        nohooks = str(Path(tmp) / "no-hooks")
-        git = Git(ctx.runner, executable, cwd, ctx.budget, ctx.environ, nohooks)
-        change = build_change(git, needs, tmp)
+        git = Git(ctx.runner, executable, cwd, ctx.budget, ctx.environ, tmp)
+
+        def bases(repository: str, branch: str) -> list[str]:
+            return fetch_bases(config, ctx, repository, branch)
+
+        change = build_change(git, needs, tmp, bases, ctx.environ, config.git_hooks_dir)
     body = json.dumps(
         {"session_id": payload.get("session_id"), **change}, separators=(",", ":")
     ).encode("utf-8")
@@ -729,6 +1099,8 @@ def upload_change(
         config.service_url + CHANGES_PATH, body, headers_for(config),
         ctx.budget.timeout(config.timeout), config.context,
     )  # fmt: skip
+    if response.status == 409 and _error_code(response) == "device_busy":
+        raise ClientError("device_busy")
     if response.status != 201 or len(response.body) > MAX_RESPONSE_BYTES:
         raise ClientError(f"upload_status_{response.status}")
     try:
@@ -740,15 +1112,27 @@ def upload_change(
     return change_id, str(change["head"])
 
 
+def _error_code(response: HttpResponse) -> str | None:
+    if len(response.body) > MAX_RESPONSE_BYTES:
+        return None
+    try:
+        data = json.loads(response.body.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        return None
+    code = data.get("error") if isinstance(data, dict) else None
+    return code if isinstance(code, str) else None
+
+
 def decide_with_change(
     payload: Mapping[str, Any],
     config: ClientConfig,
     body: bytes,
     needs: NeedsChange,
     ctx: PrepushContext,
+    writable: Writable,
 ) -> Verdict:
-    """Upload the change, then ask decide again with it attached."""
-    change_id, head = upload_change(payload, config, needs, ctx)
+    """Upload the change, then ask decide again with it attached (same report_id)."""
+    change_id, head = upload_change(payload, config, needs, ctx, writable)
     request = json.loads(body.decode("utf-8"))
     request.update({"change_id": change_id, "change_head": head})
     again = json.dumps(request, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
@@ -769,15 +1153,20 @@ class Machine:
     hostname: Callable[[], str]
     is_windows: bool
     getuser: Callable[[], str]
+    config_path: Path
+    writable: Writable
 
 
 def _prepare(
-    raw: bytes, environ: Mapping[str, str], timeout_variable: str, machine: Machine
+    raw: bytes, environ: Mapping[str, str], mode: str, machine: Machine, logs: list[str]
 ) -> tuple[dict[str, Any], ClientConfig, bytes]:
+    file = read_file_config(machine.config_path, machine.writable)
+    logs.append(file.log_file)
     payload = parse_hook_input(raw)
-    config = load_config(environ, timeout_variable)
+    timeout = file.decide_timeout if mode == "decide" else file.report_timeout
+    config = load_config(file, timeout, machine.writable)
     claim = os_account_claim(environ, machine.is_windows, machine.getuser)
-    body = build_body(payload, config, machine.hostname(), claim)
+    body = build_body(payload, config, machine.hostname(), claim, uuid.uuid4().hex)
     return payload, config, body
 
 
@@ -799,8 +1188,9 @@ def run_decide(
 ) -> HookOutput:
     event: str | None = None
     prepush = False
+    logs: list[str] = []
     try:
-        payload, config, body = _prepare(raw, environ, ENV_DECIDE_TIMEOUT, machine)
+        payload, config, body = _prepare(raw, environ, "decide", machine, logs)
         event = str(payload["hook_event_name"])
         response = transport.post(
             config.service_url + DECIDE_PATH,
@@ -815,31 +1205,37 @@ def run_decide(
             prepush = True
             if clocked is None:
                 raise ClientError("no_git_runner")
-            seconds = parse_timeout(environ.get(ENV_DEADLINE))
-            budget = Budget(seconds, clocked.monotonic, clocked.start)
+            budget = Budget(config.hook_deadline, clocked.monotonic, clocked.start)
             ctx = PrepushContext(environ, transport, clocked.runner, budget)
-            verdict = decide_with_change(payload, config, body, needs, ctx)
+            verdict = decide_with_change(payload, config, body, needs, ctx, machine.writable)
         return render(event, verdict)
     except ClientError as error:
-        log_line(environ, "decide", event or "-", ("prepush:" if prepush else "") + error.code)
+        log_line(_last(logs), "decide", event or "-", ("prepush:" if prepush else "") + error.code)
+        if prepush and error.code in PREPUSH_MESSAGES:
+            return block_output(event, PREPUSH_MESSAGES[error.code])
     except Exception as error:
-        log_line(environ, "decide", event or "-", type(error).__name__)
+        log_line(_last(logs), "decide", event or "-", type(error).__name__)
     return block_output(event, PREPUSH_BLOCK_MESSAGE if prepush else BLOCK_MESSAGE)
+
+
+def _last(logs: list[str]) -> str | None:
+    return logs[-1] if logs else None
 
 
 def run_report(
     raw: bytes, environ: Mapping[str, str], transport: Transport, machine: Machine
 ) -> HookOutput:
     event = "-"
+    logs: list[str] = []
     try:
-        payload, config, body = _prepare(raw, environ, ENV_REPORT_TIMEOUT, machine)
+        payload, config, body = _prepare(raw, environ, "report", machine, logs)
         event = str(payload["hook_event_name"])
     except ClientError as error:
-        log_line(environ, "report", event, "dropped:" + error.code)
+        log_line(_last(logs), "report", event, "dropped:" + error.code)
         return HookOutput(0)
     url = config.service_url + ACTIVITY_PATH
     last = "unknown"
-    for _attempt in range(2):  # the contract allows one retry
+    for _attempt in range(2):  # the contract allows one retry, with the same report_id
         try:
             response = transport.post(
                 url, body, headers_for(config), config.timeout, config.context
@@ -850,7 +1246,7 @@ def run_report(
         if response.status == 202:
             return HookOutput(0)
         last = f"status_{response.status}"
-    log_line(environ, "report", event, "dropped:" + last)
+    log_line(_last(logs), "report", event, "dropped:" + last)
     return HookOutput(0)
 
 
@@ -868,17 +1264,20 @@ def main(
     isolated: bool = bool(sys.flags.isolated),
     git_runner: GitRunner | None = None,
     monotonic: Callable[[], float] = time.monotonic,
+    config_path: Path = DEFAULT_CONFIG_PATH,
+    writable: Writable = user_can_write,
 ) -> int:
     """Run one hook. Unless the interpreter runs isolated (`python -I`: no PYTHONPATH,
     PYTHONSTARTUP, user site or script-directory imports a user could plant), nothing is
-    sent: decide mode blocks and report mode drops the record with a log line."""
+    sent: decide mode blocks and report mode drops the record. `environ` supplies only
+    the operating-system account claim and the base environment of git; `config_path`
+    and `writable` are seams for tests."""
     start = monotonic()
     mode = argv[1] if len(argv) == 2 else ""
-    machine = Machine(hostname, is_windows, getuser)
+    machine = Machine(hostname, is_windows, getuser, config_path, writable)
     clocked = Clocked(git_runner or SubprocessGitRunner(), monotonic, start)
     if not isolated:
         stdin.read()
-        log_line(environ, mode or "unknown", "", "refused:not_isolated")
         result = HookOutput(0) if mode == "report" else block_output(None)
     elif mode == "report":
         result = run_report(stdin.read(), environ, transport, machine)

@@ -4,7 +4,9 @@
 Order for one hook report, from a device the API layer already authenticated:
 
 1. normalize (`ciso.intake.normalize_hook_report`): the request becomes one
-   `ObservedAction` plus the content to inspect, held in memory only;
+   `ObservedAction` plus the content to inspect, held in memory only. The device name is
+   the registered name of the authenticated device (`device_names`), never the request's;
+   a request naming another device is refused (review H4, queue Q8);
 2. attribute (`AgentRegistry.attribute`): person and agent behind the session;
 3. inspect, when `requires_inspection(action)` (`Inspector.inspect` on the normalized
    input). A push or commit is inspected through its uploaded change
@@ -19,7 +21,9 @@ Order for one hook report, from a device the API layer already authenticated:
      the answer is `change_refused`. While the sandbox report is not back the answer is
      `checks_pending`. Then the command's, the diff's and the sandbox's results are merged
      into one inspection and the rules decide (a commit has no sandbox run);
-4. decide (`GovernanceEngine.decide`, which audits the decision itself);
+4. decide (`GovernanceEngine.decide`, which audits the decision itself). An allowed push
+   asked with its change records its head as approved for its repository and branch
+   (`ChangeService.record_approved`, review H1);
 5. record findings (`FindingsService.record`): for decide, every decision; for activity,
    denials only.
 
@@ -32,6 +36,7 @@ deny with a fixed message, a fresh decision id and an audit record of the refusa
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from enum import StrEnum
 from typing import Any, Final
 
@@ -42,7 +47,7 @@ from ciso.app.change_decide import (
     sandbox_failed,
     split_change_ref,
 )
-from ciso.app.change_models import ChangeRefused, ChangeState
+from ciso.app.change_models import ChangeRefused, ChangeState, ResolvedChange
 from ciso.app.change_shape import change_shape
 from ciso.app.changes import ChangeService
 from ciso.common.activity import (
@@ -195,6 +200,7 @@ class DecisionPipeline:
         engine: GovernanceEngine,
         findings: FindingsService,
         actor_id: str,
+        device_names: Callable[[str], str | None],
         changes: ChangeService | None = None,
     ) -> None:
         self._clock = clock
@@ -205,6 +211,7 @@ class DecisionPipeline:
         self._engine = engine
         self._findings = findings
         self._actor = actor_id
+        self._device_names = device_names
         self._changes = changes
 
     # --- decide ----------------------------------------------------------------------
@@ -227,8 +234,9 @@ class DecisionPipeline:
         report = self._normalize(request, device_actor_id)
         action = report.action
         inspection: InspectionResult | None
+        change: ResolvedChange | None = None
         if ref is not None:
-            inspection = self._change_inspection(action, report, ref, device_actor_id)
+            inspection, change = self._change_inspection(action, report, ref, device_actor_id)
             decision = self._engine.decide(action, self._attribute(action), inspection)
         else:
             decision, inspection = self.judge(action, report)
@@ -237,7 +245,20 @@ class DecisionPipeline:
         except Exception as exc:
             logger.error("governance pipeline: findings not recorded (%s)", type(exc).__name__)
             raise _Refused(PipelineReason.FINDINGS_UNAVAILABLE, action) from exc
+        if change is not None and decision.verdict is Verdict.ALLOW:
+            self._approve_head(change, decision.decision_id)
         return _response(decision, action, inspection, attached=ref is not None)
+
+    def _approve_head(self, change: ResolvedChange, decision_id: str) -> None:
+        """An allowed, fully scanned push: its head becomes a base later pushes may start
+        their scan from (review H1). Not recorded means a later push scans more, never
+        less, so a failure here is logged and the allow stands."""
+        if self._changes is None:
+            return
+        try:
+            self._changes.record_approved(change, decision_id=decision_id)
+        except Exception as exc:
+            logger.error("governance pipeline: head not recorded (%s)", type(exc).__name__)
 
     def judge(
         self, action: ObservedAction, report: NormalizedReport | None
@@ -256,9 +277,9 @@ class DecisionPipeline:
 
     def _change_inspection(
         self, action: ObservedAction, report: NormalizedReport, ref: ChangeRef, device: str
-    ) -> InspectionResult:
-        """The merged inspection of a push or commit asked with its change. Raises
-        `_Refused` (change_refused, checks_pending, inspection_failed)."""
+    ) -> tuple[InspectionResult, ResolvedChange]:
+        """The merged inspection of a push or commit asked with its change, and the change.
+        Raises `_Refused` (change_refused, checks_pending, inspection_failed)."""
         shape = change_shape(action)
         if shape is None or not carries_a_change(action) or self._changes is None:
             raise _Refused(PipelineReason.CHANGE_REFUSED, action, code="change_not_applicable")
@@ -279,7 +300,7 @@ class DecisionPipeline:
             parts.append(sandbox_failed(action.action_id))
         elif change.state is ChangeState.DONE:
             parts.append(change.sandbox)
-        return merge_inspections(action.action_id, parts)
+        return merge_inspections(action.action_id, parts), change
 
     def _inspect_plain(
         self, action: ObservedAction, report: NormalizedReport
@@ -310,9 +331,15 @@ class DecisionPipeline:
 
     def _normalize(self, request: Any, device_actor_id: str) -> NormalizedReport:
         try:
+            device_name = self._device_names(device_actor_id)
+        except Exception as exc:
+            logger.error("governance pipeline: device directory failed (%s)", type(exc).__name__)
+            raise _Refused(PipelineReason.ATTRIBUTION_UNAVAILABLE) from exc
+        try:
             return normalize_hook_report(
                 request,
                 device_actor_id=device_actor_id,
+                device_name=device_name,
                 received_at=self._clock.now(),
                 redactor=self._redactor,
             )

@@ -155,6 +155,8 @@ def test_bundle_without_git_image_refuses(
         job_id="job-1",
         archive_format=ArchiveFormat.GIT_BUNDLE,
         archive=b"# v2 git bundle\nabc refs/heads/main\n\nPACK",
+        head="1" * 40,
+        commits=("1" * 40,),
         checks=(CheckId.TESTS,),
     )
     report = JobRunner(backend, partial, clock).run(bundle).to_wire()

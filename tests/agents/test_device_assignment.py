@@ -129,7 +129,7 @@ def test_unassign_ends_the_vouching(
     assert ended.unassigned_at is not None
     assert _outcomes(audit, UNASSIGN) == [AuditOutcome.ATTEMPT, AuditOutcome.SUCCESS]
     after = registry.attribute(make_action(session="2", claims=claim, device_actor=DEVICE_A))
-    assert after.state is InformationState.DECLARED
+    assert (after.person_ref, after.state) == (None, InformationState.UNKNOWN)
     assert registry.list_device_assignments() == ()
     assert len(registry.list_device_assignments(include_ended=True)) == 1
     with pytest.raises(AgentsNotFound):

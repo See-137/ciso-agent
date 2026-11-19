@@ -102,14 +102,19 @@ def register_device(api: Api, name: str = DEVICE_NAME) -> tuple[str, str]:
 
 
 def build_world(make_api: ApiFactory, **kwargs: Any) -> World:
-    """A device, an employee bound to the device's OS account, and an approved
-    employee-operated agent identified by the device name."""
+    """A device assigned to an employee bound to the device's OS account (so the
+    attribution is `verified`), and an approved employee-operated agent identified by the
+    device name."""
     kwargs.setdefault("environ", GOV_ENV)
     api = make_api(**kwargs)
     device_id, device_token = register_device(api)
     person, person_token = api.human("Jo Doe", Role.EMPLOYEE)
     admin = api.headers(api.admin_token)
     person_ref = f"actor:{person.actor_id}"
+    r = api.client.post(
+        f"/v1/devices/{device_id}/assignments", json={"people": [person_ref]}, headers=admin
+    )
+    assert r.status_code == 201, r.text
     r = api.client.post(
         "/v1/agents/bindings",
         json={"kind": "os_account", "subject": OS_ACCOUNT, "person_ref": person_ref},

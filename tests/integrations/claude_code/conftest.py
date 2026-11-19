@@ -7,6 +7,7 @@ test talks to a fake transport; the repository egress guard blocks real connecti
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
@@ -24,6 +25,8 @@ MANAGED_ROOT = INTEGRATION / "managed"
 
 TOKEN_VALUE = "dev-token-abc123"
 SERVICE_URL = "https://governance.example.test"
+#: The empty hooks directory the managed env names (an absolute path on any OS).
+HOOKS_DIR = Path(__file__).resolve().parent / "no-hooks-for-tests"
 
 
 def load_script(path: Path, name: str) -> ModuleType:
@@ -89,18 +92,82 @@ def token_file(tmp_path: Path) -> Path:
     return path
 
 
+def make_ca_pem() -> bytes:
+    """A self-signed CA certificate in PEM, so the client's TLS context can load it."""
+    import datetime
+
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.x509.oid import NameOID
+
+    key = ec.generate_private_key(ec.SECP256R1())
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "aigov test ca")])
+    now = datetime.datetime(2026, 1, 1, tzinfo=datetime.UTC)
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now)
+        .not_valid_after(now + datetime.timedelta(days=3650))
+        .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
+        .sign(key, hashes.SHA256())
+    )
+    return cert.public_bytes(serialization.Encoding.PEM)
+
+
+@pytest.fixture(scope="session")
+def ca_pem() -> bytes:
+    return make_ca_pem()
+
+
 @pytest.fixture
-def environ(token_file: Path, tmp_path: Path) -> dict[str, str]:
-    """A complete managed environment, as the policy pack would set it."""
+def ca_bundle(tmp_path: Path, ca_pem: bytes) -> Path:
+    path = tmp_path / "ca.pem"
+    path.write_bytes(ca_pem)
+    return path
+
+
+@pytest.fixture
+def git_exe(tmp_path: Path) -> Path:
+    exe = tmp_path / "git.exe"
+    exe.write_bytes(b"")
+    return exe
+
+
+@pytest.fixture
+def config(token_file: Path, ca_bundle: Path, git_exe: Path, tmp_path: Path) -> dict[str, Any]:
+    """A complete client configuration file, as the managed pack installs it."""
     return {
-        "AIGOV_SERVICE_URL": SERVICE_URL,
-        "AIGOV_DEVICE_TOKEN_FILE": str(token_file),
-        "AIGOV_DECIDE_TIMEOUT_SECONDS": "8",
-        "AIGOV_REPORT_TIMEOUT_SECONDS": "2",
-        "AIGOV_LOG_FILE": str(tmp_path / "hook-client.log"),
-        "USERDOMAIN": "CORP",
-        "USERNAME": "jdoe",
+        "service_url": SERVICE_URL,
+        "ca_bundle": str(ca_bundle),
+        "token_file": str(token_file),
+        "decide_timeout_seconds": 8,
+        "report_timeout_seconds": 2,
+        "hook_deadline_seconds": 14,
+        "git_path": str(git_exe),
+        "surface": "cli",
+        "log_file": str(tmp_path / "hook-client.log"),
+        "git_hooks_dir": str(HOOKS_DIR),
     }
+
+
+@pytest.fixture
+def environ() -> dict[str, str]:
+    """The hook's environment: only what the client may read from it (the OS account)."""
+    return {"USERDOMAIN": "CORP", "USERNAME": "jdoe", "PATH": "/usr/bin"}
+
+
+def write_config(tmp_path: Path, config: dict[str, Any]) -> Path:
+    path = tmp_path / "aigov-client.json"
+    path.write_text(json.dumps(config), encoding="utf-8")
+    return path
+
+
+def never_writable(path: Path) -> bool:
+    return False
 
 
 PRE_TOOL_USE: dict[str, Any] = {
@@ -147,10 +214,16 @@ Runner = Callable[..., Any]
 
 
 @pytest.fixture
-def run(hc: ModuleType, environ: dict[str, str], transport: FakeTransport) -> Runner:
-    """Run the client's `main` with in-memory streams; returns (exit, stdout, stderr)."""
+def run(
+    hc: ModuleType,
+    environ: dict[str, str],
+    transport: FakeTransport,
+    config: dict[str, Any],
+    tmp_path: Path,
+) -> Runner:
+    """Run the client's `main` with in-memory streams; returns (exit, stdout, stderr).
+    `conf` replaces the configuration file's content (None: the `config` fixture)."""
     import io
-    import json
 
     def _run(
         mode: str,
@@ -158,6 +231,7 @@ def run(hc: ModuleType, environ: dict[str, str], transport: FakeTransport) -> Ru
         env: dict[str, str] | None = None,
         raw: bytes | None = None,
         isolated: bool = True,
+        conf: dict[str, Any] | None = None,
     ) -> tuple[int, str, str]:
         data = raw if raw is not None else json.dumps(payload).encode("utf-8")
         stdin = io.BytesIO(data)
@@ -173,6 +247,8 @@ def run(hc: ModuleType, environ: dict[str, str], transport: FakeTransport) -> Ru
             hostname=lambda: "WS-0142",
             is_windows=True,
             isolated=isolated,
+            config_path=write_config(tmp_path, config if conf is None else conf),
+            writable=never_writable,
         )
         return code, stdout.getvalue(), stderr.getvalue()
 

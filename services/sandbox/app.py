@@ -42,6 +42,10 @@ class JobRequest(Model):
     archive_format: ArchiveFormat
     archive_b64: Annotated[str, Field(min_length=1, max_length=MAX_BODY_BYTES)]
     base_ref: str | None = None
+    #: Bundle jobs only: the commit the bundle's HEAD must be, and every commit of the
+    #: range (head first). Checked against the bundle before anything runs.
+    head: str | None = None
+    commits: tuple[str, ...] | None = None
     checks: tuple[CheckId, ...]
 
     def to_job(self) -> Job:
@@ -54,6 +58,8 @@ class JobRequest(Model):
             archive_format=self.archive_format,
             archive=archive,
             base_ref=self.base_ref,
+            head=self.head,
+            commits=self.commits,
             checks=self.checks,
         )
 

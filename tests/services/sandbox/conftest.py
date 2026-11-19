@@ -33,6 +33,8 @@ def images() -> SandboxImages:
         semgrep=image("semgrep"),
         git=image("git"),
         semgrep_config="/rules/semgrep",
+        gitleaks_config="/rules/gitleaks.toml",
+        gitleaks_ignore_file="/rules/empty.gitleaksignore",
     )
 
 

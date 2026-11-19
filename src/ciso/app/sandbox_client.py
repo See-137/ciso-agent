@@ -9,6 +9,11 @@ parsed JSON; turning the report into findings is `ciso.inspection.from_sandbox_r
   unset, a token that does not resolve or is shorter than the sandbox's own minimum, or
   a URL that is not https (or plain http to a loopback host) refuses with `FailClosed`
   before anything is sent.
+- The job carries the pushed `head`, the `commits` of the range and the `base_ref` (an
+  approved head, or None: the whole history); the sandbox checks all three against the
+  bundle and reports the head it scanned (reviews M2, H1).
+- 429 (the sandbox runs one job at a time) is `SandboxBusy`: the worker tries the same
+  job again later without spending a queue attempt (review L3).
 - Redirects are refused: a redirect could carry the bearer token to another host.
 - The answer is read with a hard cap (`MAX_REPORT_BYTES`); anything but a 200 with a
   JSON object is `SandboxUnavailable` with a short code (never the body, never the
@@ -24,6 +29,7 @@ from typing import Any, Final
 
 import httpx
 
+from ciso.app.change_models import SandboxInput
 from ciso.app.governance_settings import check_sandbox_url
 from ciso.common.errors import CisoError, FailClosed
 from ciso.common.protocols import SecretResolver
@@ -41,6 +47,10 @@ class SandboxUnavailable(CisoError):
     def __init__(self, code: str) -> None:
         super().__init__(code)
         self.code = code
+
+
+class SandboxBusy(SandboxUnavailable):
+    """The sandbox is running another job (429). Not a failure of this job."""
 
 
 class SandboxClient:
@@ -63,18 +73,18 @@ class SandboxClient:
     def __repr__(self) -> str:
         return f"SandboxClient(url={self._url!r})"
 
-    def run(
-        self, job_id: str, bundle: bytes, base_ref: str, checks: Sequence[str]
-    ) -> Mapping[str, Any]:
+    def run(self, item: SandboxInput, checks: Sequence[str]) -> Mapping[str, Any]:
         """Send one bundle job and return the report. See the module docstring."""
         url, token, timeout = self._ready()
         if not checks:
             raise FailClosed("no sandbox checks are configured")
         body = {
-            "job_id": job_id,
+            "job_id": item.change_id,
             "archive_format": "git_bundle",
-            "archive_b64": base64.b64encode(bundle).decode("ascii"),
-            "base_ref": base_ref,
+            "archive_b64": base64.b64encode(item.bundle).decode("ascii"),
+            "base_ref": item.base,
+            "head": item.head,
+            "commits": list(item.commits),
             "checks": list(checks),
         }
         headers = {"Authorization": "Bearer " + token, "Accept": "application/json"}
@@ -85,6 +95,8 @@ class SandboxClient:
                 ) as client,
                 client.stream("POST", url + JOBS_PATH, json=body, headers=headers) as response,
             ):
+                if response.status_code == 429:
+                    raise SandboxBusy("status_429")
                 if response.status_code != 200:
                     raise SandboxUnavailable(f"status_{response.status_code}")
                 raw = _read_capped(response)

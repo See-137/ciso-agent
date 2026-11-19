@@ -1,7 +1,10 @@
 """The job the governance service sends, and the fixed allowlist of test commands.
 
-A job carries the change as a tar archive of the working tree or as a git bundle, the base
-commit for the diff (bundles only: a tree has no history), and which checks to run. The
+A job carries the change as a tar archive of the working tree or as a git bundle, and
+which checks to run. A bundle job also states what the bundle must be (review M2, H1):
+`head`, the commit its HEAD must name; `commits`, every commit of the range, head first;
+and optionally `base_ref`, the commit the range starts above (None: the whole history
+from the root). The runner verifies all three inside the bundle before anything runs. The
 test command is never taken from the job: it is chosen from `TEST_COMMANDS` by the project
 type detected from files at the root of the tree.
 """
@@ -20,6 +23,8 @@ from ciso.common.schemas import Model
 
 #: Largest archive or bundle accepted, in bytes. Structural bound, not a tunable.
 MAX_ARCHIVE_BYTES: Final = 32 * 1024 * 1024
+#: Most commits one bundle job may cover (the governance service's own cap).
+MAX_JOB_COMMITS: Final = 1000
 
 JOB_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")
 #: A full commit id (SHA-1 or SHA-256). Names like `main` or `HEAD~1` are refused.
@@ -90,6 +95,14 @@ class Job(Model):
     archive_format: ArchiveFormat
     archive: Annotated[bytes, Field(min_length=1, max_length=MAX_ARCHIVE_BYTES)] = Field(repr=False)
     base_ref: Annotated[str, AfterValidator(_commit)] | None = None
+    head: Annotated[str, AfterValidator(_commit)] | None = None
+    commits: (
+        Annotated[
+            tuple[Annotated[str, AfterValidator(_commit)], ...],
+            Field(min_length=1, max_length=MAX_JOB_COMMITS),
+        ]
+        | None
+    ) = None
     checks: Annotated[tuple[CheckId, ...], Field(min_length=1, max_length=len(CheckId))]
 
     @model_validator(mode="after")
@@ -98,6 +111,14 @@ class Job(Model):
             raise ValueError("each check may be requested once")
         if self.base_ref is not None and self.archive_format is ArchiveFormat.TAR:
             raise ValueError("base_ref needs history: send a git bundle, not a tar archive")
+        if self.archive_format is ArchiveFormat.TAR:
+            if self.head is not None or self.commits is not None:
+                raise ValueError("head and commits describe a git bundle, not a tar archive")
+            return self
+        if self.head is None or self.commits is None:
+            raise ValueError("a git bundle job needs head and commits")
+        if self.commits[0] != self.head or len(set(self.commits)) != len(self.commits):
+            raise ValueError("commits must be distinct and start with head")
         return self
 
 

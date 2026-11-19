@@ -29,7 +29,7 @@ import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeGuard
 
 PLACEHOLDER = "REPLACE_ME"
 MARKETPLACE_NAME = "corp-ai-governance"
@@ -53,6 +53,34 @@ PROFILE_ARTIFACT = "macos/com.anthropic.claudecode.mobileconfig"
 ADMX_ARTIFACT = "windows/admx/ClaudeCodeGovernance.admx"
 ADML_ARTIFACT = "windows/admx/en-US/ClaudeCodeGovernance.adml"
 
+#: The hook client's one configuration file, installed next to ``platform_hook.client``.
+CLIENT_CONFIG_NAME = "aigov-client.json"
+CLIENT_CONFIG_ARTIFACTS = {p: f"{p}/{CLIENT_CONFIG_NAME}" for p in ("windows", "macos", "linux")}
+#: Keys the client requires (``hook_client.CONFIG_KEYS``; a test pins the two together).
+CLIENT_CONFIG_KEYS = frozenset(
+    {
+        "service_url",
+        "ca_bundle",
+        "token_file",
+        "decide_timeout_seconds",
+        "report_timeout_seconds",
+        "hook_deadline_seconds",
+        "git_path",
+        "surface",
+        "log_file",
+        "git_hooks_dir",
+    }
+)
+#: Git configuration the managed env must give the agent's own git (review H2, Q16).
+#: None: an absolute, admin-owned path (the empty hooks directory IT creates).
+REQUIRED_GIT_CONFIG: tuple[tuple[str, str | None], ...] = (
+    ("core.hooksPath", None),
+    ("safe.bareRepository", "explicit"),
+    ("push.recurseSubmodules", "no"),
+    ("protocol.ext.allow", "never"),
+)
+_GIT_CONFIG_PAIR_RE = re.compile(r"GIT_CONFIG_(KEY|VALUE)_\d+")
+_SURFACE_RE = re.compile(r"[a-z][a-z0-9_-]{0,31}")
 _UUID_RE = re.compile(
     r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
 )
@@ -188,7 +216,7 @@ def hook_timeouts(policy: dict[str, Any], events: tuple[str, ...]) -> list[int]:
     ]
 
 
-def _absolute(path: Any, platform: str) -> bool:
+def _absolute(path: Any, platform: str) -> TypeGuard[str]:
     if not isinstance(path, str):
         return False
     if platform == "windows":
@@ -297,25 +325,103 @@ def _plugin_errors(policy: dict[str, Any]) -> list[str]:
 
 
 def _env_errors(policy: dict[str, Any], platform: str) -> list[str]:
-    errors = []
+    """No client setting in ``env`` (review C1: the client reads its file only, and an
+    ``AIGOV_*`` value here would suggest otherwise), and the git configuration the agent's
+    own git must run with (review H2, queue Q16)."""
     env = policy.get("env", {})
-    url = env.get("AIGOV_SERVICE_URL")
+    errors = [
+        f"env.{name} must not be set: the client reads {CLIENT_CONFIG_NAME} only"
+        for name in env
+        if isinstance(name, str) and name.upper().startswith("AIGOV_")
+    ]
+    return errors + git_env_errors(env, platform)
+
+
+def git_env_errors(env: dict[str, Any], platform: str) -> list[str]:
+    """Exactly ``GIT_CONFIG_COUNT`` and the ``GIT_CONFIG_KEY_n`` / ``GIT_CONFIG_VALUE_n``
+    pairs of ``REQUIRED_GIT_CONFIG``, in that order, and no other ``GIT_*`` variable (the
+    hook client refuses a scanned push unless the environment holds exactly these). The
+    hooks directory must be an absolute, admin-owned path."""
+    errors: list[str] = []
+    expected = {"GIT_CONFIG_COUNT"} | {
+        f"GIT_CONFIG_{part}_{i}"
+        for i in range(len(REQUIRED_GIT_CONFIG))
+        for part in ("KEY", "VALUE")
+    }
+    extra = sorted(k for k in env if k.upper().startswith("GIT_") and k not in expected)
+    if extra:
+        errors.append(f"env sets git variables the client does not accept: {extra}")
+    if env.get("GIT_CONFIG_COUNT") != str(len(REQUIRED_GIT_CONFIG)):
+        errors.append(f"env.GIT_CONFIG_COUNT must be {len(REQUIRED_GIT_CONFIG)}")
+    for index, (key, value) in enumerate(REQUIRED_GIT_CONFIG):
+        if env.get(f"GIT_CONFIG_KEY_{index}") != key:
+            errors.append(f"env.GIT_CONFIG_KEY_{index} must be {key!r}")
+        found = env.get(f"GIT_CONFIG_VALUE_{index}")
+        if value is None:
+            if not (_absolute(found, platform) or has_placeholder(found)):
+                errors.append(f"env git configuration {key} must be an absolute directory")
+            elif isinstance(found, str) and any(m in found for m in USER_WRITABLE_MARKERS):
+                errors.append(f"env git configuration {key} must not be user-writable")
+        elif found != value:
+            errors.append(f"env git configuration {key} must be {value!r}")
+    return errors
+
+
+def hooks_dir_of(policy: dict[str, Any]) -> Any:
+    """The hooks directory the managed env gives git (``core.hooksPath``)."""
+    index = [key for key, _ in REQUIRED_GIT_CONFIG].index("core.hooksPath")
+    return policy.get("env", {}).get(f"GIT_CONFIG_VALUE_{index}")
+
+
+def client_config(source: dict[str, Any], platform: str) -> dict[str, Any]:
+    """The client's configuration file for one platform: shared values, that platform's
+    paths, and the hooks directory its managed env names."""
+    env = source["platform_env"][platform]
+    hooks = env.get("GIT_CONFIG_VALUE_0")
+    return {**source["client"], **source["platform_client"][platform], "git_hooks_dir": hooks}
+
+
+def client_config_errors(
+    config: dict[str, Any], policy: dict[str, Any], platform: str
+) -> list[str]:
+    """Every key the client requires, an https service URL, absolute paths (the CA bundle
+    and git outside any user-writable place), and timeouts below the hook timeouts."""
+    errors: list[str] = []
+    keys = set(config)
+    if keys != CLIENT_CONFIG_KEYS:
+        missing, extra = sorted(CLIENT_CONFIG_KEYS - keys), sorted(keys - CLIENT_CONFIG_KEYS)
+        errors.append(f"client configuration keys differ (missing {missing}, unknown {extra})")
+    url = config.get("service_url")
     if not has_placeholder(url) and not (isinstance(url, str) and _HTTPS_RE.fullmatch(url)):
-        errors.append("env.AIGOV_SERVICE_URL must be an https URL")
-    token = env.get("AIGOV_DEVICE_TOKEN_FILE", "")
-    absolute = _WINDOWS_ABS_RE.fullmatch(token) if platform == "windows" else token.startswith("/")
-    if not absolute:
-        errors.append("env.AIGOV_DEVICE_TOKEN_FILE must be an absolute path")
-    for variable, events in (
-        ("AIGOV_DECIDE_TIMEOUT_SECONDS", DECIDE_EVENTS),
-        ("AIGOV_REPORT_TIMEOUT_SECONDS", REPORT_EVENTS),
+        errors.append("client service_url must be an https URL")
+    for key in ("ca_bundle", "token_file", "git_path", "log_file"):
+        value = config.get(key)
+        if not _absolute(value, platform):
+            errors.append(f"client {key} must be an absolute path")
+        elif key in ("ca_bundle", "git_path") and any(m in value for m in USER_WRITABLE_MARKERS):
+            errors.append(f"client {key} must not be in a user-writable place")
+    if config.get("git_hooks_dir") != hooks_dir_of(policy):
+        errors.append("client git_hooks_dir must equal the managed env's core.hooksPath")
+    surface = config.get("surface")
+    if not (isinstance(surface, str) and _SURFACE_RE.fullmatch(surface)):
+        errors.append("client surface must be a short lowercase label")
+    decide_limits = hook_timeouts(policy, DECIDE_EVENTS)
+    for key, events in (
+        ("decide_timeout_seconds", DECIDE_EVENTS),
+        ("report_timeout_seconds", REPORT_EVENTS),
+        ("hook_deadline_seconds", DECIDE_EVENTS),
     ):
-        seconds = _seconds(env.get(variable))
+        value = config.get(key)
+        seconds = None if isinstance(value, bool) else _seconds(value)
         limits = hook_timeouts(policy, events)
-        if seconds is None:
-            errors.append(f"env.{variable} must be a positive number of seconds")
+        if seconds is None or isinstance(value, str):
+            errors.append(f"client {key} must be a positive number of seconds")
         elif not limits or seconds >= min(limits):
-            errors.append(f"env.{variable} must be shorter than the managed hook timeout")
+            errors.append(f"client {key} must be shorter than the managed hook timeout")
+    deadline = _seconds(config.get("hook_deadline_seconds"))
+    decide = _seconds(config.get("decide_timeout_seconds"))
+    if decide_limits and deadline is not None and decide is not None and decide > deadline:
+        errors.append("client decide_timeout_seconds must not exceed hook_deadline_seconds")
     return errors
 
 
@@ -414,6 +520,13 @@ def check_pack(pack: Path, plugin_dir: Path) -> Report:
         if policy is not None:
             report.errors.extend(f"{relative}: {e}" for e in policy_errors(policy, platform))
             report.placeholders.extend(find_placeholders(policy, relative))
+        client_relative = CLIENT_CONFIG_ARTIFACTS[platform]
+        client = _load_json(pack, client_relative, report)
+        if client is not None and policy is not None:
+            report.errors.extend(
+                f"{client_relative}: {e}" for e in client_config_errors(client, policy, platform)
+            )
+            report.placeholders.extend(find_placeholders(client, client_relative))
     _compare(pack, REG_ARTIFACT, read_registry_settings, policies["windows"], "registry", report)
     _compare(
         pack, PROFILE_ARTIFACT, read_profile_settings, policies["macos"], "mobileconfig", report

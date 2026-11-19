@@ -27,6 +27,8 @@ PLANTED = "plantedSecretValue-7f3a9c1e5b"
 
 RECEIVED_AT = datetime(2026, 11, 18, 9, 0, 0, tzinfo=UTC)
 DEVICE_ACTOR = "svc_device_ws0142"
+#: The registered name of DEVICE_ACTOR (the API layer reads it from the device directory).
+DEVICE_NAME = "WS-0142"
 
 #: Standard Webhooks reference library test vector (libraries/python/tests/test_webhooks.py,
 #: https://github.com/standard-webhooks/standard-webhooks): test_sign_function.

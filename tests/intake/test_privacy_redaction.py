@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 from tests.intake.conftest import (
     DEVICE_ACTOR,
+    DEVICE_NAME,
     PLANTED,
     RECEIVED_AT,
     envelope,
@@ -37,7 +38,7 @@ def everything(report: NormalizedReport) -> str:
 
 def hook(request: dict[str, Any], redactor: SecretRedactor) -> NormalizedReport:
     return normalize_hook_report(
-        request, device_actor_id=DEVICE_ACTOR, received_at=RECEIVED_AT, redactor=redactor
+        request, device_actor_id=DEVICE_ACTOR, device_name=DEVICE_NAME, received_at=RECEIVED_AT, redactor=redactor
     )
 
 

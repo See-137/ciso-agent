@@ -9,15 +9,28 @@ A check whose image or rules are unset is `error` on its own. The whole job shar
 wall-time budget; each container gets only what is left.
 
 A tar job: every container receives the tar the sandbox rebuilt (`archive.pack_tree`).
-A bundle job: the scanners receive the bundle (they need history for the diff from
-`base_ref`); the tests receive the HEAD tree, exported by a git container and then put
-through the same archive checks as a tar job.
+A bundle job: first a git container verifies that the bundle is what the job states
+(`verify.verify_bundle`: HEAD, base ancestry, the exact commit set); a mismatch ends the
+job with every check `error` `sandbox.range_mismatch` (a bundle job with no git image:
+`sandbox.settings_unset`). Then the scanners receive the bundle (history from `base_ref`,
+or the whole history); the tests receive the HEAD tree, exported by a git container and
+then put through the same archive checks as a tar job. Every bundle container re-checks
+that its clone's HEAD is the verified head (`SANDBOX_HEAD`); the report names that head.
+
+The scanners never read configuration from the scanned code (review H3): gitleaks gets the
+image's config and an empty ignore file and ignores inline allow comments, and scans a
+bundle twice (history in `git` mode and the checked-out tree in `dir` mode, merged into
+one `secrets` check); semgrep ignores `nosemgrep` comments and `.semgrepignore` files. The
+fixed scripts move the scanners' own files out of the scanned directory, and the bundle
+script writes `* diff -export-ignore -export-subst` to `.git/info/attributes`, which
+outranks any `.gitattributes` in the tree, so `git log -p` shows every file as text and
+`git archive` exports every file as committed.
 """
 
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Final
@@ -33,8 +46,16 @@ from services.sandbox.parsers import (
     parse_pytest,
     parse_semgrep,
 )
-from services.sandbox.report import CheckReport, Report, Status, error_check, finding
+from services.sandbox.report import (
+    CheckReport,
+    Report,
+    Status,
+    error_check,
+    finding,
+    merge_checks,
+)
 from services.sandbox.settings import ResolvedLimits, SandboxSettings, SettingsUnset
+from services.sandbox.verify import verify_bundle
 
 from ciso.common.activity import Severity
 from ciso.common.clock import Clock
@@ -43,14 +64,29 @@ from services.sandbox import archive
 
 logger = logging.getLogger(__name__)
 
+#: The scanners' own configuration files, moved out of the scanned root before anything
+#: runs (defence in depth: the commands already name fixed files from the image).
+_SCANNER_FILES: Final = "for f in .gitleaks.toml .gitleaksignore .semgrepignore; do "
 #: Unpack the streamed tar into the work dir and run the command words given as arguments.
 TAR_SCRIPT: Final = (
-    'set -eu; mkdir -p /work/src /work/tmp; tar -x -f - -C /work/src; cd /work/src; exec "$@"'
+    "set -eu; mkdir -p /work/src /work/tmp; tar -x -f - -C /work/src; cd /work/src; "
+    + _SCANNER_FILES
+    + 'if [ -e "$f" ]; then mv -f -- "$f" "/work/tmp/inert$f"; fi; done; '
+    + 'exec "$@"'
 )
-#: Clone the streamed bundle into the work dir and run the command words given as arguments.
+#: Clone the streamed bundle, check its HEAD is the verified head, override every attribute
+#: file in the tree, move the scanner files away (tracked ones marked skip-worktree first,
+#: so `git status` stays clean for semgrep's baseline) and run the command words.
 BUNDLE_SCRIPT: Final = (
     "set -eu; mkdir -p /work/tmp; cat > /work/tmp/in.bundle; "
-    'git clone -q /work/tmp/in.bundle /work/src; cd /work/src; exec "$@"'
+    "git clone -q /work/tmp/in.bundle /work/src; cd /work/src; "
+    'test "$(git rev-parse HEAD)" = "$SANDBOX_HEAD"; '
+    "mkdir -p .git/info; "
+    "printf '* diff -export-ignore -export-subst\\n' > .git/info/attributes; "
+    + _SCANNER_FILES
+    + 'if [ -e "$f" ]; then git update-index --skip-worktree -- "$f" 2>/dev/null || true; '
+    + 'mv -f -- "$f" "/work/tmp/inert$f"; fi; done; '
+    + 'exec "$@"'
 )
 
 _BASE_ENV: Final = (("HOME", "/work"), ("TMPDIR", "/work/tmp"), ("LANG", "C.UTF-8"))
@@ -139,8 +175,13 @@ class JobRunner:
             return _all(job, "archive_rejected", str(exc))
         except _Unusable:
             return _all(job, "isolation_unavailable", "the isolation backend is not usable")
-        checks = tuple(self._execute(p, self._backend, limits, deadline) for p in plans)
-        return Report(job_id=job.job_id, checks=checks)
+        except _GitUnset:
+            return _all(job, "settings_unset", "git image not configured")
+        except _RangeMismatch:
+            return _all(job, "range_mismatch", "the bundle is not the change the job states")
+        checks = _merged(self._execute(p, self._backend, limits, deadline) for p in plans)
+        # A tar job carries no head (the job validator refuses one), so it reports none.
+        return Report(job_id=job.job_id, head=job.head, checks=checks)
 
     # --- planning ---------------------------------------------------------------------
 
@@ -149,11 +190,17 @@ class JobRunner:
     ) -> list[_Plan]:
         bundle = job.archive_format is ArchiveFormat.GIT_BUNDLE
         tree: SourceTree | None = None
+        git_image = self._settings.images.git
         if bundle:
             archive.validate_bundle(job.archive)
+            if git_image is None:
+                raise _GitUnset
         else:
             tree = read_tree(job.archive)
-        plans = [self._scanner_plan(c, job, tree) for c in job.checks if c is not CheckId.TESTS]
+        plans: list[_Plan] = []
+        for check in job.checks:
+            if check is not CheckId.TESTS:
+                plans += self._scanner_plans(check, job, tree)
         wants_tests = CheckId.TESTS in job.checks
         images = [p.image for p in plans if p.report is None]
         test_plan: _Plan | None = None
@@ -161,35 +208,58 @@ class JobRunner:
             test_plan = self._test_plan(tree)
             if test_plan.report is None:
                 images.append(test_plan.image)
-        elif wants_tests and self._settings.images.git is not None:
-            images.insert(0, self._settings.images.git)
+        if git_image is not None and bundle:
+            images.insert(0, git_image)
         _probe(backend, images)
+        remaining = self._remaining(deadline)
+        if (
+            git_image is not None
+            and bundle
+            and not verify_bundle(job, backend, git_image, limits, remaining)
+        ):
+            raise _RangeMismatch
         if wants_tests:
             if test_plan is None:
                 test_plan = self._bundle_test_plan(job, backend, limits, deadline)
-            plans.insert(job.checks.index(CheckId.TESTS), test_plan)
+            earlier = set(job.checks[: job.checks.index(CheckId.TESTS)])
+            plans.insert(sum(1 for p in plans if p.check in earlier), test_plan)
         return plans
 
-    def _scanner_plan(self, check: CheckId, job: Job, tree: SourceTree | None) -> _Plan:
+    def _scanner_plans(self, check: CheckId, job: Job, tree: SourceTree | None) -> list[_Plan]:
+        """The runs of one scanner check; secrets on a bundle runs twice (merged later)."""
         images = self._settings.images
         stdin = job.archive if tree is None else pack_tree(tree)
         script = BUNDLE_SCRIPT if tree is None else TAR_SCRIPT
+        env = _bundle_env(job) if tree is None else _BASE_ENV
         if check is CheckId.SECRETS:
-            if images.gitleaks is None:
-                return _Plan(check, report=_unset(check, "gitleaks image"))
-            mode = ("gitleaks", "git", ".") if tree is None else ("gitleaks", "dir", ".")
-            rng = ("--log-opts", f"{job.base_ref}..HEAD") if tree is None and job.base_ref else ()
-            rules = ("--config", images.gitleaks_config) if images.gitleaks_config else ()
-            command = (*mode, *rng, *rules, "--report-format", "json", "--report-path", "-")
-            command += ("--redact", "--no-banner", "--exit-code", "0")
-            return _Plan(check, None, images.gitleaks, command, stdin, script, _BASE_ENV,
-                         parse_gitleaks)  # fmt: skip
+            config, ignore = images.gitleaks_config, images.gitleaks_ignore_file
+            if images.gitleaks is None or config is None or ignore is None:
+                return [_Plan(check, report=_unset(check, "gitleaks image, config or ignore file"))]
+            fixed: tuple[str, ...] = (
+                "--config",
+                config,
+                "--gitleaks-ignore-path",
+                ignore,
+                "--ignore-gitleaks-allow",
+            )
+            fixed += ("--report-format", "json", "--report-path", "-")
+            fixed += ("--redact", "--no-banner", "--exit-code", "0")
+            modes: list[tuple[str, ...]] = [("gitleaks", "dir", ".")]
+            if tree is None:
+                rng = ("--log-opts", f"{job.base_ref}..HEAD") if job.base_ref else ()
+                modes.insert(0, ("gitleaks", "git", ".", *rng))
+            gitleaks = images.gitleaks
+            return [
+                _Plan(check, None, gitleaks, (*m, *fixed), stdin, script, env, parse_gitleaks)
+                for m in modes
+            ]
         if images.semgrep is None or images.semgrep_config is None:
-            return _Plan(check, report=_unset(check, "semgrep image or rules"))
+            return [_Plan(check, report=_unset(check, "semgrep image or rules"))]
         base = ("--baseline-commit", job.base_ref) if tree is None and job.base_ref else ()
-        command = ("semgrep", "scan", "--json", "--config", images.semgrep_config)
+        command: tuple[str, ...] = ("semgrep", "scan", "--json", "--config", images.semgrep_config)
+        command += ("--disable-nosem", "--x-ignore-semgrepignore-files")
         command += ("--metrics", "off", "--disable-version-check", *base, ".")
-        return _Plan(check, None, images.semgrep, command, stdin, script, _BASE_ENV, parse_semgrep)
+        return [_Plan(check, None, images.semgrep, command, stdin, script, env, parse_semgrep)]
 
     def _test_plan(self, tree: SourceTree) -> _Plan:
         project = _detect(tree.paths())
@@ -221,7 +291,7 @@ class JobRunner:
             image=git_image,
             script=BUNDLE_SCRIPT,
             command=("git", "archive", "--format=tar", "HEAD"),
-            env=_BASE_ENV,
+            env=_bundle_env(job),
             stdin=job.archive,
             limits=limits,
             timeout_seconds=remaining,
@@ -271,6 +341,32 @@ class JobRunner:
 
 class _Unusable(Exception):
     pass
+
+
+class _GitUnset(Exception):
+    """A bundle job with no git image: the bundle cannot be verified."""
+
+
+class _RangeMismatch(Exception):
+    """The bundle is not the change the job states (`verify.verify_bundle`)."""
+
+
+def _bundle_env(job: Job) -> tuple[tuple[str, str], ...]:
+    """The fixed env plus the verified head every bundle script asserts."""
+    if job.head is None:
+        raise _RangeMismatch
+    return (*_BASE_ENV, ("SANDBOX_HEAD", job.head))
+
+
+def _merged(reports: Iterable[CheckReport]) -> tuple[CheckReport, ...]:
+    """Consecutive reports of the same check become one (`merge_checks`)."""
+    out: list[CheckReport] = []
+    for report in reports:
+        if out and out[-1].check_id == report.check_id:
+            out[-1] = merge_checks(out[-1], report)
+        else:
+            out.append(report)
+    return tuple(out)
 
 
 def _probe(backend: Backend, images: list[str]) -> None:

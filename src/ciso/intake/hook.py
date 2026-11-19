@@ -1,7 +1,7 @@
 """`assistant_hook_v1`: a hook report posted to the decision API (docs/skill/decision-api.md).
 
 The envelope is a closed schema: `format`, `event`, `surface`, `claims`, `payload`, an
-optional `device` (missing or null: no device) and an optional `report_id` (a client
+optional `device` (missing or null: the client read no host name) and an optional `report_id` (a client
 nonce, made once per hook invocation and reused on its retry), at most
 `MAX_REQUEST_BYTES` of JSON.
 The payload is the hook's own input, passed through unchanged by the client; its known
@@ -199,6 +199,7 @@ def normalize_hook_report(
     request: Any,
     *,
     device_actor_id: str,
+    device_name: str | None,
     received_at: datetime,
     redactor: Redactor,
 ) -> NormalizedReport:
@@ -221,7 +222,10 @@ def normalize_hook_report(
     cwd = _clean(payload["cwd"]) if payload.get("cwd") is not None else None
     surface = _matching(envelope["surface"], _SURFACE)
     raw_device = envelope.get("device")
-    device = None if raw_device is None else _matching(raw_device, _DEVICE)
+    stated = None if raw_device is None else _matching(raw_device, _DEVICE)
+    device = None if device_name is None else _matching(device_name, _DEVICE)
+    if stated is not None and stated != device:
+        raise refuse(RefusalCode.DEVICE_MISMATCH)
     claims = _claims(envelope["claims"], device, _clean_actor(device_actor_id))
     if "report_id" in envelope:
         report = "id:" + _matching(envelope["report_id"], _IDENT)

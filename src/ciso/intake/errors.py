@@ -26,6 +26,8 @@ class RefusalCode(StrEnum):
     CLAIM_KIND_RESERVED = "claim_kind_reserved"
     MISSING_CORRELATION_ID = "missing_correlation_id"
     MALFORMED_TOOL_INPUT = "malformed_tool_input"
+    #: The request's `device` is not the device the token authenticated (review H4, Q8).
+    DEVICE_MISMATCH = "device_mismatch"
     # Central gate delivery and signature.
     BODY_TOO_LARGE = "body_too_large"
     UNSIGNED_REQUEST = "unsigned_request"

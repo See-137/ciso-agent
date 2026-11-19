@@ -1,0 +1,12 @@
+{
+  "service_url": "https://REPLACE_ME_SERVICE_HOST",
+  "decide_timeout_seconds": 8,
+  "report_timeout_seconds": 1,
+  "hook_deadline_seconds": 14,
+  "surface": "cli",
+  "ca_bundle": "C:\\Program Files\\AIGovernance\\ca-bundle.pem",
+  "token_file": "C:\\ProgramData\\AIGovernance\\device-token",
+  "git_path": "C:\\Program Files\\Git\\cmd\\git.exe",
+  "log_file": "C:\\ProgramData\\AIGovernance\\logs\\hook-client.log",
+  "git_hooks_dir": "C:\\Program Files\\AIGovernance\\git-hooks"
+}

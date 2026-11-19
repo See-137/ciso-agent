@@ -38,7 +38,8 @@ def wire(check: CheckReport) -> dict[str, Any]:
     data = Report(job_id="job-1", checks=(check,)).to_wire()
     json.dumps(data)
     validate_wire(data)
-    assert set(data) == {"job_id", "checks"}
+    assert set(data) == {"job_id", "head", "checks"}
+    assert data["head"] is None
     assert_wire_check(data["checks"][0])
     return data["checks"][0]  # type: ignore[no-any-return]
 

@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from sqlalchemy import Engine
-from tests.fakes.core import FakeAudit, FakePrincipals, FakeSecrets
+from tests.fakes.core import FakeAudit, FakeKillSwitch, FakePrincipals, FakeSecrets
 
 from ciso.app.changes import ChangeService
 from ciso.common.clock import FixedClock
@@ -48,6 +48,16 @@ def sha(text: str) -> str:
 
 HEAD = sha("head")
 BASE = sha("base")
+REPOSITORY = "https://git.example.test/team/app.git"
+
+
+def bundle_for(head: str, extra: bytes = b"") -> bytes:
+    """A bundle header naming `head` as HEAD and refs/heads/aigov, as the client builds."""
+    refs = f"{head} HEAD\n{head} refs/heads/aigov\n".encode()
+    return b"# v2 git bundle\n" + extra + refs + b"\nPACK-bytes-" + MARKER.encode()
+
+
+BUNDLE = bundle_for(HEAD)
 
 
 def push_upload(**changes: Any) -> dict[str, Any]:
@@ -57,8 +67,9 @@ def push_upload(**changes: Any) -> dict[str, Any]:
         "remote": "origin",
         "branch": "feature",
         "source": "feature",
+        "repository": REPOSITORY,
         "head": HEAD,
-        "base": BASE,
+        "base": None,
         "commits": [HEAD],
         "diff_b64": base64.b64encode(CLEAN_DIFF.encode()).decode(),
         "bundle_b64": base64.b64encode(BUNDLE).decode(),
@@ -87,6 +98,7 @@ class ChangeWorld:
     queue: JobQueue
     service: ChangeService
     store_dir: Path
+    killswitch: FakeKillSwitch
 
 
 def build_queue(engine: Engine, clock: FixedClock, audit: FakeAudit) -> JobQueue:
@@ -115,6 +127,7 @@ def build_changes(
     audit = FakeAudit(clock)
     queue = build_queue(engine, clock, audit)
     store_dir = tmp_path / "changes"
+    killswitch = FakeKillSwitch()
     service = ChangeService(
         engine,
         clock=clock,
@@ -125,5 +138,6 @@ def build_changes(
         retention_seconds=retention,
         store_dir=store_dir,
         actor_id="ciso_governance",
+        killswitch=killswitch,
     )
-    return ChangeWorld(engine, clock, audit, queue, service, store_dir)
+    return ChangeWorld(engine, clock, audit, queue, service, store_dir, killswitch)
