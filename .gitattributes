@@ -2,3 +2,10 @@
 # identical on every platform whatever core.autocrlf says.
 integrations/claude_code/managed/** -text
 config/governance-ruleset.provisional.json -text
+# The plugin bundles byte-identical copies of the engine and generated files, and its
+# build check compares bytes: keep the sources and the plugin LF on every checkout.
+src/** text eol=lf
+config/** text eol=lf
+tools/** text eol=lf
+integrations/claude_code/ciso-plugin/** text eol=lf
+integrations/claude_code/managed-plugin/** text eol=lf

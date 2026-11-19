@@ -1,23 +1,25 @@
-# AI and Agent Security Governance
+# CISO agent for a Claude organization
 
-Governance and monitoring layer for a company's AI activity: organizational AI systems and
-the agents employees operate. Built for the CISO of a startup that uses Claude Enterprise.
-The scope is `docs/skill/spec-draft.md` (2026-11-18). It replaced the original whole-company
-blueprint (`docs/reference/blueprint-v1.0.txt`); the core platform built from that
-blueprint (audit, policy, approvals, identity, kill switch, vault) is reused.
-Local build only: nothing deployed.
+A Claude Code plugin that acts as a startup's CISO agent: a CISO skill plus local hooks
+that decide every agent action with fixed rules before it runs, no servers
+(`integrations/claude_code/ciso-plugin/`). It reuses the governance engine in `src/ciso`.
+An optional central server and sandbox add-on is in `src/ciso/app`, `src/ciso/api` and
+`services/sandbox` and is not finished. Local build only: nothing deployed or pushed.
 
 ## Start here
 
-1. `docs/skill/spec-draft.md`: what is being built, the milestones S0-S7, what is verified.
-   `docs/plan/handover.md` is the latest handover; check its claims against the tree.
-2. `docs/plan/followups.md`: open findings and owner decisions.
-3. `docs/plan/decisions.md` (wins over `docs/plan/implementation-plan.md`),
-   `docs/architecture/system-design.md`, `docs/adr/`.
+1. `docs/plan/handover.md`: where the build stopped and what is open. Check its claims
+   against the tree.
+2. `docs/HANDOVER-CISO-AGENT.md`: the deliverable, for an organization installing it.
+3. `integrations/claude_code/ciso-plugin/README.md`: the plugin's full reference.
+4. `docs/skill/spec-draft.md` (scope and rules that do not change),
+   `docs/skill/review-queue.md` (open items), `docs/reviews/`.
 
 ## Commands (Git Bash, from the repo root)
 
 - Tests: `uv run pytest` (addopts already include `-q`; a second `-q` hides the summary).
+- Plugin bundle: `uv run python tools/build_ciso_plugin.py` after any change to the bundled
+  engine or rules; `--check` must pass before a commit.
 - Types: `uv run mypy`. Lint: `uv run ruff check src tests`.
 - Before trusting or committing the tree, search for guards left disabled by an
   interrupted mutation test: `grep -rnE "^\s*(el)?if (False|True)\s*:" src/`.
