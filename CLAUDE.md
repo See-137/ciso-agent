@@ -13,13 +13,15 @@ An optional central server and sandbox add-on is in `src/ciso/app`, `src/ciso/ap
 2. `docs/HANDOVER-CISO-AGENT.md`: the deliverable, for an organization installing it.
 3. `integrations/claude_code/ciso-plugin/README.md`: the plugin's full reference.
 4. `docs/skill/spec-draft.md` (scope and rules that do not change),
-   `docs/skill/review-queue.md` (open items), `docs/reviews/`.
+   `docs/skill/review-queue.md` (findings queue; its status note lists what is open),
+   `docs/reviews/`.
 
 ## Commands (Git Bash, from the repo root)
 
 - Tests: `uv run pytest` (addopts already include `-q`; a second `-q` hides the summary).
-- Plugin bundle: `uv run python tools/build_ciso_plugin.py` after any change to the bundled
-  engine or rules; `--check` must pass before a commit.
+- Plugin bundle: after a rule change run `uv run python config/derive_governance_ruleset.py`
+  first; after any change to the bundled engine or rules run
+  `uv run python tools/build_ciso_plugin.py`; `--check` must pass before a commit.
 - Types: `uv run mypy`. Lint: `uv run ruff check src tests`.
 - Before trusting or committing the tree, search for guards left disabled by an
   interrupted mutation test: `grep -rnE "^\s*(el)?if (False|True)\s*:" src/`.

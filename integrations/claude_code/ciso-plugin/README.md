@@ -311,6 +311,15 @@ or packages of the apps' environment. Nothing is enforced in the apps by this sk
 
 ## Real run, measured 2026-11-19 (Claude Code 2.1.316, Windows 11, model haiku)
 
+The table below was measured on commit 80fe12c, before the review fixes changed the hook
+command (`--isolated`, fixed index, runtime guard). After those fixes the coordinator re-ran
+the same setup on the final plugin (commit dcb16c9): writing `.mcp.json` denied; writing a
+file with a planted cloud key denied; pushing the branch with that key denied (the branch
+never reached the remote); pushing a clean branch allowed (the remote holds the local
+commit); stop flag on, writing a file denied. The review-fix lane separately re-ran a
+read (allowed), a force push to `main` (denied), the `core.worktree` re-root push (denied)
+and the skill review (report produced).
+
 Setup: a throwaway repository with a local bare remote under the session scratchpad
 (`main` pushed; `feature-secret` with a commit adding a cloud access key id built from
 fragments; `feature-clean` with one clean commit). Each run:

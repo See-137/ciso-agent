@@ -3,6 +3,12 @@
 Raised after the owning lane finished; to be fixed test first in the fix round, after the
 integration lane, so no two builders edit the same files.
 
+**Status, 2026-11-19.** Done: Q1-Q7, Q9, Q13, Q15, Q22 (commits fd62d62, c074fb8,
+3d5f93e, e22e3db). Belong to the unfinished server add-on, partly done on branch
+`wip/service-review-fixes`: Q8, Q10, Q11, Q12, Q14, Q16, Q17, Q18. Still open for the
+plugin's shared engine: Q19, Q20, Q21, and git long-option abbreviations for subcommands
+other than push and rebase (`commit --am`, `reset --har`, `branch --forc`, `config`).
+
 | # | Source | File | Finding |
 |---|---|---|---|
 | Q1 | Automated security review, 2026-11-19 | `src/ciso/governance/analysis.py` | HIGH. Bash evaluates some arguments arithmetically and runs any command substitution inside them: operands of `[[`, `test`/`[` (e.g. `-eq`), `-v` targets of `test`/`printf`/`read`/`declare`, `let` arguments, `((...))` bodies, and `$((name))` where `name` holds an expression. An argument of those programs containing `$(`, a backtick, `<(` or `>(` must add `unparseable` (never allowed) and clear read-only; an arithmetic expansion whose body is a bare variable name is `unparseable` too. |

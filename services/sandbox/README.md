@@ -25,7 +25,9 @@ unisolated fallback.
 ## What the owner (or the company's IT) must provide
 
 Nothing here has run against a real container yet: the build machine's Docker daemon was
-not started and no image was pulled (that needs the owner's permission).
+not started and no image was pulled by this lane. On 2026-11-19 the owner allowed Docker; the
+six base images were pulled on the build machine, but the derived images were not built and
+the sandbox was never run in a real container.
 
 1. **A dedicated host** (Linux, x86-64 or arm64) with Docker Engine 20.10 or later, or
    another OCI runtime whose CLI accepts the same `docker run` flags (Podman is likely to,
