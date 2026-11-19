@@ -15,3 +15,7 @@ integration lane, so no two builders edit the same files.
 | Q8 | Integration lane report | `src/ciso/app/governance_pipeline.py` | The device token's device name is not compared with the request's `device` field. |
 | Q9 | Integration lane report | `src/ciso/intake` | The central-gate verdict uses the action id as `reference_id`; the decision id is more useful. |
 | Q10 | Integration lane report | `src/ciso/api` | The central gate shares the general per-address rate limit; the platform posting from few addresses could hit 429. |
+| Q11 | Fix lane FB report | `src/ciso/api`, `src/ciso/app` | Device assignment route: `AgentAdmin.assign_device` / `unassign_device`, list via `AgentRegistry.list_device_assignments`; the route must check `DeviceDirectory.is_device(device_actor)` first. |
+| Q12 | Fix lane FB report | `integrations/claude_code`, `docs/skill/decision-api.md` | Accepted by the coordinator: optional envelope field `report_id` (made once per hook call, reused on retry); document it and the refusal of client claims of reserved kinds; the client must send it. |
+| Q13 | Fix lane FB report | `src/ciso/inspection` | Switch inspection to the shared `ciso.common.paths` normaliser once lane FA lands it; directory and archive targets (`cp -r`, `tar -x`) are not path findings. |
+| Q14 | Fix lane FB report | handover | Organizational agents must be registered with verifiable facts (`device_actor` or `assistant_account`); agents schema is version 2 with no migration (nothing deployed, so local databases are simply recreated). |
