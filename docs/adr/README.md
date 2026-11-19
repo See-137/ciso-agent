@@ -1,6 +1,6 @@
 # Architecture decision records
 
-These records exist because the blueprint (BP, `docs/reference/blueprint-v1.0.txt`) says in Appendix C: "Do not silently resolve deferred decisions. When a choice is required, propose an ADR with options, trade-offs, security impact and evidence needed; select a reversible default only when implementation cannot proceed otherwise."
+These records exist because the v1.0 blueprint (BP; not included in this repository) says in Appendix C: "Do not silently resolve deferred decisions. When a choice is required, propose an ADR with options, trade-offs, security impact and evidence needed; select a reversible default only when implementation cannot proceed otherwise."
 
 Rules for this directory:
 

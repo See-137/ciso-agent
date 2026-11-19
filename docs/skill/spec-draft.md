@@ -2,7 +2,7 @@
 
 Status: APPROVED by delegation, 2026-11-18. The owner asked the coordinator to decide;
 the decisions are in section 10 and each can be reversed by the owner. It replaces the scope of
-`docs/reference/blueprint-v1.0.txt` (a CISO for the whole company) with the scope below.
+the v1.0 blueprint (a CISO for the whole company; not included in this repository) with the scope below.
 The control-plane code already built stays; what happens to each part is in section 8.
 
 Facts about the assistant environment in this draft come from reading the vendor's

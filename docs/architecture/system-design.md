@@ -1,7 +1,7 @@
 # Unified CISO Agent: system design (baseline platform)
 
 Status: working design for the local build. Source of truth for scope is
-`docs/reference/blueprint-v1.0.txt` (the blueprint, "BP"). Where this file and the BP
+the v1.0 blueprint ("BP"; not included in this repository). Where this file and the BP
 disagree, the BP wins. Every technology choice below is a *proposed, reversible default*
 recorded in an ADR under `docs/adr/`; none is final until the owner approves it (BP §3
 change control, Appendix C).

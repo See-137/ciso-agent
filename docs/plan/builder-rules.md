@@ -11,8 +11,8 @@ Shell: Git Bash. Run every command from the repo root.
 3. Your task rows in `docs/plan/implementation-plan.md` section 3, and every gap row
    (G1 to G33, section 1) that your rows or your brief cite.
 4. Your module's section in `docs/architecture/system-design.md`.
-5. The blueprint sections your task rows cite, in `docs/reference/blueprint-v1.0.txt`
-   (a pdftotext dump: tables are printed column by column, so read rows with care).
+5. The blueprint sections your task rows cite (the v1.0 blueprint is not included in
+   this repository).
 6. `src/ciso/common/*.py` and `tests/fakes/core.py`, `tests/conftest.py`: the contracts and
    fixtures you build on.
 

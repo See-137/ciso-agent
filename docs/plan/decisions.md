@@ -103,7 +103,7 @@ execution broker, external-inference gate), and M3 adds the registry, evidence s
 connector contract, which is the first point where the platform takes a fixture estate in
 and shows a source-attributed registry end to end (blueprint Phase 2 exit gate). Before
 pushing: confirm the repository is private, confirm no secret values are in the tree or
-its history, and note that the blueprint PDF in `docs/reference/` is marked internal.
+its history, and keep the internal blueprint out of the repository.
 
 Still open for the owner: where the audit anchor and witness live; whether a console is
 wanted; whether administrators minting tokens for other people is acceptable until an

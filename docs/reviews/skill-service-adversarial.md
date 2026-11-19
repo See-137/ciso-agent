@@ -21,7 +21,7 @@ managed machine and (b) the engineer who wants the controls off. Each claim is m
   `httpx.MockTransport` fake sandbox). Because the governance package was mid-edit by the
   other agent (the working tree's default ruleset did not load, every probe answered
   `ruleset_unavailable`), the probes ran against a `git archive HEAD` copy of `src/` and
-  `tests/` (commit `436219b`) in the scratchpad. Client probes imported the real
+  `tests/` (commit `aba2549`) in the scratchpad. Client probes imported the real
   `integrations/claude_code/client/hook_client.py` and ran its `build_change` with the
   real `SubprocessGitRunner` and this machine's git 2.56.1 in throwaway repositories, and
   its `main()` with the real `UrllibTransport` against a local TLS-terminating proxy on
