@@ -15,10 +15,15 @@ managed settings.
 > with Claude Code 2.1.316. Start with the [handover](docs/HANDOVER-CISO-AGENT.md) before
 > installing.
 
+> **New here?** Follow the **[step-by-step getting-started guide](docs/GETTING-STARTED.md)**:
+> try it on your own computer in a practice folder, roll it out to your organization,
+> work with it every day, and fix what goes wrong. No security background needed.
+
 ---
 
 ## Contents
 
+- [Getting started, step by step](docs/GETTING-STARTED.md) (separate page)
 - [What it does](#what-it-does)
 - [Architecture](#architecture)
 - [How a decision is made](#how-a-decision-is-made)
@@ -248,6 +253,7 @@ are in [`docs/reviews/`](docs/reviews/) (`skill-core-adversarial.md`,
 
 ## Installing it in your organization
 
+Plain-language walkthrough: [getting-started guide](docs/GETTING-STARTED.md), Part 2.
 Full steps: [plugin README](integrations/claude_code/ciso-plugin/README.md) and the
 [handover](docs/HANDOVER-CISO-AGENT.md). In short:
 
