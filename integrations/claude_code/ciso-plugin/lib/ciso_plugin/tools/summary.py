@@ -1,4 +1,9 @@
-"""Summarise the local decision log and findings log, and check their hash chains."""
+"""Summarise the local decision log and findings log, and check their hash chains.
+
+The chains are SHA-256 over public data with no key and no outside anchor: they show an
+edited or removed line inside a log, not a log cut short or rewritten from the first
+line (review M5). The wording below says exactly that.
+"""
 
 from __future__ import annotations
 
@@ -14,6 +19,22 @@ from ciso_plugin.decide import AUDIT_FILE, FINDINGS_FILE
 MAX_RECORDS: Final = 50_000
 #: Most recent blocked actions listed.
 MAX_RECENT: Final = 20
+
+
+#: What the unanchored chain cannot show (review M5); said with every result.
+CHAIN_LIMIT: Final = "truncation and rewriting cannot be detected locally"
+
+
+def chain_text(records: int, ok: bool, first_break: int | None) -> str:
+    """The chain result in words that claim no more than it proves: it detects an edited
+    or removed line INSIDE the log, never a log cut short or rebuilt from the start,
+    because nothing is anchored outside the user's control."""
+    if ok:
+        return f"no edits detected in {records} records; {CHAIN_LIMIT}."
+    return (
+        f"hash chain BROKEN at line {first_break} of {records}: a line was edited or "
+        f"removed; {CHAIN_LIMIT}."
+    )
 
 
 def _since(records: list[dict[str, Any]], cutoff: datetime) -> list[dict[str, Any]]:
@@ -36,8 +57,7 @@ def summarise(data_dir: Path, days: int, now: datetime) -> str:
     lines = [f"# CISO summary, last {days} days", ""]
     for label, path in (("Decision log", audit_path), ("Findings log", findings_path)):
         chain = verify(path)
-        state = "intact" if chain.ok else f"BROKEN at line {chain.first_break}"
-        lines.append(f"- {label}: {chain.records} records, hash chain {state}.")
+        lines.append(f"- {label}: {chain_text(chain.records, chain.ok, chain.first_break)}")
     results = [
         r
         for r in _since(read_records(audit_path, MAX_RECORDS), cutoff)

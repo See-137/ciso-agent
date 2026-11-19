@@ -11,6 +11,13 @@ Read-only git runs in the current directory only (review C4): `-C`, `--git-dir`,
 analyzer adds that a directory change earlier in the line does too. An alias defined
 with `-c alias.<name>=...` or `git config alias.<name>` hides what runs (obfuscation);
 its `!` command and every configuration value git runs as a program are read as code.
+
+git accepts any unique abbreviation of a long option (queue Q22): every long push option
+is resolved to the full option it prefixes (`--recei=x` is `--receive-pack=x`). An
+unknown or ambiguous one is `unparseable` and leaves the destination unknown. A
+`--receive-pack` / `--exec` value is a program git runs: `unparseable`, and the value is
+read as code. A short cluster holding `o` other than `-o` itself hides a push-option
+value and is `unparseable`. `git rebase --ex`/`--exe` are `--exec`.
 """
 
 from __future__ import annotations
@@ -28,7 +35,39 @@ _GLOBAL_WITH_VALUE = frozenset(
 )
 #: The only global options that keep git read-only.
 _READ_ONLY_GLOBALS = frozenset({"--no-pager", "-P", "--no-optional-locks"})
-_PUSH_VALUE_OPTIONS = frozenset({"--repo", "-o", "--push-option", "--receive-pack", "--exec"})
+#: Every long option of `git push` -> whether it takes a value ("required", "optional",
+#: "none"). Kept equal to `ciso.intake.gitcommand.PUSH_LONG_OPTIONS` by a test.
+PUSH_LONG_OPTIONS: dict[str, str] = {
+    "verbose": "none",
+    "quiet": "none",
+    "repo": "required",
+    "all": "none",
+    "branches": "none",
+    "mirror": "none",
+    "delete": "none",
+    "tags": "none",
+    "dry-run": "none",
+    "porcelain": "none",
+    "force": "none",
+    "force-with-lease": "optional",
+    "force-if-includes": "none",
+    "recurse-submodules": "required",
+    "thin": "none",
+    "receive-pack": "required",
+    "exec": "required",
+    "set-upstream": "none",
+    "progress": "none",
+    "prune": "none",
+    "no-verify": "none",
+    "follow-tags": "none",
+    "signed": "optional",
+    "atomic": "none",
+    "push-option": "required",
+    "ipv4": "none",
+    "ipv6": "none",
+}
+_PUSH_PROGRAM_OPTIONS = frozenset({"receive-pack", "exec"})
+_PUSH_SHORT_FLAGS = frozenset("vqnfdu46o")
 _REWRITE_SUBCOMMANDS = frozenset(
     {"rebase", "filter-branch", "filter-repo", "replace", "update-ref"}
 )
@@ -42,8 +81,43 @@ _EXEC_KEY_RE = re.compile(
     r"|filter\..+\.(clean|smudge|process)|merge\..+\.driver|credential\.helper"
 )
 _FORCE_LONG = frozenset(
-    {"--force", "--force-with-lease", "--force-if-includes", "--delete", "--mirror", "--prune"}
+    {"force", "force-with-lease", "force-if-includes", "delete", "mirror", "prune"}
 )
+_REBASE_EXEC_SPELLINGS = frozenset({"ex", "exe", "exec"})
+
+
+class PushOption(NamedTuple):
+    name: str
+    negated: bool
+    value: str | None
+
+
+def _spellings() -> dict[str, tuple[str, bool]]:
+    out: dict[str, tuple[str, bool]] = {}
+    for name in PUSH_LONG_OPTIONS:
+        out[name] = (name, False)
+        out["no-" + name] = (name, True)
+        if name.startswith("no-"):
+            out[name[3:]] = (name, True)
+    return out
+
+
+_SPELLINGS = _spellings()
+
+
+def resolve_push_option(arg: str) -> PushOption | None:
+    """The push option `--<name>[=value]` stands for, resolving a unique abbreviation as
+    git does; None when it is unknown or ambiguous."""
+    name, eq, value = arg[2:].partition("=")
+    if not arg.startswith("--") or not name:
+        return None
+    exact = _SPELLINGS.get(name)
+    if exact is None:
+        found = {hit for spelled, hit in _SPELLINGS.items() if spelled.startswith(name)}
+        if len(found) != 1:
+            return None
+        exact = found.pop()
+    return PushOption(exact[0], exact[1], value if eq else None)
 
 
 class GitFacts(NamedTuple):
@@ -130,24 +204,71 @@ def _destination(spec: str, found: set[C]) -> str | None:
     return dest
 
 
-def _push(args: list[str], protected: tuple[str, ...], found: set[C]) -> tuple[set[str], bool]:
+class _PushArgs(NamedTuple):
+    positionals: list[str]
+    long: set[str]
+    shorts: set[str]
+    unparseable: bool
+    code: list[str]
+
+
+def _push_args(args: list[str]) -> _PushArgs:
+    """Positionals, resolved long options (not negated), short flags, and the programs
+    the push would run."""
+    out = _PushArgs([], set(), set(), False, [])
+    bad = False
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        i += 1
+        if arg == "--":
+            out.positionals.extend(args[i:])
+            break
+        if not arg.startswith("-") or arg == "-":
+            out.positionals.append(arg)
+        elif arg.startswith("--"):
+            option = resolve_push_option(arg)
+            if option is None:
+                bad = True
+                continue
+            value = option.value
+            if value is None and PUSH_LONG_OPTIONS[option.name] == "required" and i < len(args):
+                value, i = args[i], i + 1
+            if option.negated:
+                continue
+            out.long.add(option.name)
+            if option.name in _PUSH_PROGRAM_OPTIONS:
+                bad = True
+                if value:
+                    out.code.append(value)
+        elif arg == "-o":
+            i += 1  # its value
+        else:
+            letters = set(arg[1:])
+            bad = bad or "o" in letters or not letters <= _PUSH_SHORT_FLAGS
+            out.shorts.update(letters)
+    return out._replace(unparseable=bad)
+
+
+def _push(
+    args: list[str], protected: tuple[str, ...], found: set[C], code: list[str]
+) -> tuple[set[str], bool]:
     found.add(C.GIT_PUSH)
-    flags = _short_flags(args)
-    long = {a.partition("=")[0] for a in args if a.startswith("--")}
-    if "f" in flags or "d" in flags or long & _FORCE_LONG:
+    parsed = _push_args(args)
+    if parsed.unparseable:
+        found.add(C.UNPARSEABLE)
+    code.extend(parsed.code)
+    if "f" in parsed.shorts or "d" in parsed.shorts or parsed.long & _FORCE_LONG:
         found.add(C.GIT_FORCE_PUSH)
-    positionals: list[str] = []
-    skip = False
-    for arg in args:
-        if skip:
-            skip = False
-            continue
-        if arg.startswith("-"):
-            skip = arg in _PUSH_VALUE_OPTIONS
-            continue
-        positionals.append(arg)
+    if "no-verify" in parsed.long:
+        found.add(C.GIT_HOOKS_CHANGE)
+    positionals = parsed.positionals
     named: set[str] = set()
-    unknown = bool(long & {"--all", "--mirror", "--branches"}) or len(positionals) <= 1
+    unknown = (
+        parsed.unparseable
+        or bool(parsed.long & {"all", "mirror", "branches"})
+        or len(positionals) <= 1
+    )
     for spec in positionals[1:]:
         dest = _destination(spec, found)
         if dest is None:
@@ -216,10 +337,12 @@ def _rewrite(sub: str, args: list[str]) -> bool:
 def _nested(sub: str, args: list[str]) -> list[str]:
     out: list[str] = []
     for i, arg in enumerate(args):
-        if sub == "rebase" and arg in ("-x", "--exec") and i + 1 < len(args):
+        name, eq, value = arg.partition("=")
+        long_exec = name.startswith("--") and name[2:] in _REBASE_EXEC_SPELLINGS
+        if sub == "rebase" and (arg == "-x" or (long_exec and not eq)) and i + 1 < len(args):
             out.append(args[i + 1])
-        elif sub == "rebase" and arg.startswith("--exec="):
-            out.append(arg.partition("=")[2])
+        elif sub == "rebase" and long_exec and eq:
+            out.append(value)
     if sub == "submodule" and args[:1] == ["foreach"]:
         out.append(" ".join(a for a in args[1:] if a != "--recursive"))
     if sub == "bisect" and args[:1] == ["run"]:
@@ -282,7 +405,7 @@ def check_git(args: list[str], protected: tuple[str, ...]) -> GitFacts:
     unknown = False
     read_only = False
     if sub == "push":
-        branches, unknown = _push(sub_args, protected, found)
+        branches, unknown = _push(sub_args, protected, found, code)
     elif sub in ("credential", "credential-store", "credential-cache"):
         found.add(C.CREDENTIAL_ACCESS)
     elif sub == "clean" and ("f" in _short_flags(sub_args) or "--force" in sub_args):

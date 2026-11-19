@@ -4,18 +4,26 @@ No sandbox and no server: the hook resolves the push itself (spec C2/C5 without 
 
 1. The command must be one plain push naming one remote and one branch
    (`ciso.app.change_shape`, bundled); anything else is refused by the caller.
-2. Settings that redirect or widen the push, or run programs during it, refuse it
+2. The scan never follows settings that re-root it (review H2): the repository found from
+   the hook's `cwd` must be a plain one, its git directory exactly `<top>/.git` (a
+   folder) where `<top>` is what `git rev-parse --show-toplevel` reports, and `cwd`
+   inside `<top>`. `core.worktree` (in any scope), `core.bare`, a `gitdir:` file or a
+   linked worktree refuse the push or commit scan (`repo_layout`).
+3. Settings that redirect or widen the push, or run programs during it, refuse it
    (`config_hazards`, `hook_hazards`): `remote.<name>.push|mirror|pushurl|receivepack|
-   uploadpack`, any `url.*.pushInsteadOf`, `core.gitProxy`, repository-level
-   `core.sshCommand` / `core.askPass` / `credential.*helper`, `push.recurseSubmodules` or
-   `submodule.recurse` asking to push submodules, `core.hooksPath` pointing inside the
-   repository, and hook programs in the repository's hooks directory.
-3. The scan base: `git ls-remote --heads <remote>` (git contacts the remote the push will
+   uploadpack`, more than one `remote.<name>.url` (git pushes to every url while the
+   scan base comes from the first, review M1), any `url.*.pushInsteadOf`,
+   `core.gitProxy`, repository-level `core.sshCommand` / `core.askPass` /
+   `credential.*helper`, `push.recurseSubmodules` or `submodule.recurse` asking to push
+   submodules, `core.hooksPath` pointing inside the repository, and hook programs in the
+   repository's hooks directory. The message names fixed reason codes only
+   (`HAZARD_CODES`), never a key or a value (review L2).
+4. The scan base: `git ls-remote --heads <remote>` (git contacts the remote the push will
    contact anyway; Python opens no connection). An advertised branch tip is used as a base
    only when the local remote-tracking ref for it holds the same commit, so neither a
    lying remote nor a moved local ref alone can shrink the scan. With no usable base the
    range runs to the root. More than `MAX_PUSH_COMMITS` commits refuses the push.
-4. Every commit in the range is inspected separately (`git log -p`, merges against their
+5. Every commit in the range is inspected separately (`git log -p`, merges against their
    first parent, renames off, no textconv): a secret added in one commit and deleted in
    the next is still found. Binary changes make the result incomplete, so the push is
    refused (the ruleset's `missing_inspection: deny`).
@@ -25,6 +33,7 @@ Tests are NOT run (no sandbox). That is the optional sandbox add-on's job.
 
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -44,11 +53,29 @@ _SHA: Final = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
 _REMOTE_KEYS: Final = ("push", "mirror", "pushurl", "receivepack", "uploadpack")
 _REPO_SCOPES: Final = frozenset({"local", "worktree"})
 _SUBMODULE_OK: Final = frozenset({"no", "false", "0", "off", "check"})
+_FALSE: Final = frozenset({"false", "no", "off", "0"})
+#: Fixed reason codes shown to the person for each refused setting (review L2).
+HAZARD_CODES: Final[dict[str, str]] = {
+    "push": "remote_push_refspec",
+    "mirror": "remote_mirror",
+    "pushurl": "remote_push_url",
+    "receivepack": "remote_receive_pack",
+    "uploadpack": "remote_upload_pack",
+    "second_url": "remote_second_url",
+    "pushinsteadof": "url_push_instead_of",
+    "core.gitproxy": "git_proxy",
+    "core.sshcommand": "ssh_command",
+    "core.askpass": "askpass_program",
+    "credential": "credential_helper",
+    "push.recursesubmodules": "submodule_push",
+    "submodule.recurse": "submodule_push",
+    "core.hookspath": "hooks_path_in_repository",
+}
 
 
 class ScanRefused(Exception):
-    """The push cannot be scanned or must not run. `code` is fixed; `names` are config
-    key names only (never values)."""
+    """The push cannot be scanned or must not run. `code` is fixed; `names` are fixed
+    reason codes from `HAZARD_CODES` (never a key name or a value)."""
 
     def __init__(self, code: str, names: tuple[str, ...] = ()) -> None:
         super().__init__(code)
@@ -90,29 +117,63 @@ def _inside(path_text: str, top: Path) -> bool:
 
 
 def config_hazards(entries: list[ConfigEntry], remote: str, top: Path) -> tuple[str, ...]:
-    """Names of settings that redirect or widen this push or run programs during it."""
+    """Fixed reason codes (`HAZARD_CODES`) of settings that redirect or widen this push or
+    run programs during it."""
     remote_prefix = f"remote.{remote.casefold()}."
     found: list[str] = []
+    urls = 0
     for entry in entries:
         key = entry.key
-        if key.startswith(remote_prefix) and key.rpartition(".")[2] in _REMOTE_KEYS:
-            found.append(key)
+        last = key.rpartition(".")[2]
+        if key == remote_prefix + "url":
+            urls += 1
+        if key.startswith(remote_prefix) and last in _REMOTE_KEYS:
+            found.append(HAZARD_CODES[last])
         elif key.startswith("url.") and key.endswith(".pushinsteadof"):
-            found.append("url.<base>.pushinsteadof")
+            found.append(HAZARD_CODES["pushinsteadof"])
         elif key == "core.gitproxy" or (
-            entry.scope in _REPO_SCOPES
-            and (
-                key in {"core.sshcommand", "core.askpass"}
-                or (key.startswith("credential.") and key.endswith("helper"))
-            )
+            entry.scope in _REPO_SCOPES and key in {"core.sshcommand", "core.askpass"}
         ):
-            found.append(key)
+            found.append(HAZARD_CODES[key])
+        elif (
+            entry.scope in _REPO_SCOPES and key.startswith("credential.") and key.endswith("helper")
+        ):
+            found.append(HAZARD_CODES["credential"])
         elif key in {"push.recursesubmodules", "submodule.recurse"}:
             if entry.value.strip().casefold() not in _SUBMODULE_OK:
-                found.append(key)
+                found.append(HAZARD_CODES[key])
         elif key == "core.hookspath" and _inside(entry.value, top):
-            found.append(key)
+            found.append(HAZARD_CODES[key])
+    if urls > 1:
+        found.append(HAZARD_CODES["second_url"])
     return tuple(dict.fromkeys(found))
+
+
+def _same_path(a: Path, b: Path) -> bool:
+    try:
+        return os.path.normcase(str(a.resolve())) == os.path.normcase(str(b.resolve()))
+    except (OSError, ValueError):
+        return False
+
+
+def plain_top(git: SafeGit) -> Path:
+    """The working tree of the plain repository at the git runner's directory. Raises
+    `ScanRefused("repo_layout")` when settings or files re-root it (review H2)."""
+    top = Path(git.out("rev-parse", "--show-toplevel", code="not_a_repository"))
+    git_dir = Path(git.out("rev-parse", "--absolute-git-dir", code="not_a_repository"))
+    dot_git = top / ".git"
+    if not dot_git.is_dir() or dot_git.is_symlink() or not _same_path(git_dir, dot_git):
+        raise ScanRefused("repo_layout")
+    try:
+        Path(git.cwd).resolve().relative_to(top.resolve())
+    except (OSError, ValueError) as error:
+        raise ScanRefused("repo_layout") from error
+    for entry in read_config(git.at(str(top))):
+        if entry.key == "core.worktree" or (
+            entry.key == "core.bare" and entry.value.strip().casefold() not in _FALSE
+        ):
+            raise ScanRefused("repo_layout")
+    return top
 
 
 def hook_hazards(git: SafeGit, entries: list[ConfigEntry]) -> bool:
@@ -211,8 +272,7 @@ def scan_push(git: SafeGit, shape: ChangeShape, action_id: str) -> InspectionRes
     """The inspection of everything the push sends. Raises `ScanRefused` or `GitError`."""
     if shape.kind is not ChangeKind.PUSH or shape.remote is None or shape.branch is None:
         raise ScanRefused("push_not_plain")
-    top_text = git.out("rev-parse", "--show-toplevel", code="not_a_repository")
-    top = Path(top_text)
+    top = plain_top(git)
     repo = git.at(str(top))
     entries = read_config(repo)
     if not any(e.key == f"remote.{shape.remote.casefold()}.url" for e in entries):
@@ -231,8 +291,8 @@ def scan_push(git: SafeGit, shape: ChangeShape, action_id: str) -> InspectionRes
 
 def scan_commit(git: SafeGit, action_id: str) -> InspectionResult:
     """The inspection of the staged change a plain `git commit -m` records."""
-    top = git.out("rev-parse", "--show-toplevel", code="not_a_repository")
-    diff = git.at(top).out(
+    top = plain_top(git)
+    diff = git.at(str(top)).out(
         "diff",
         "--cached",
         "--no-color",

@@ -1,16 +1,20 @@
 """What the person sees when the plugin blocks or holds an action.
 
 Every text is fixed or built from the engine's fixed explanation and the inspection's
-fixed finding fields (rule title, remediation, `path:line`). Nothing from the command,
-the prompt or the file content is ever echoed, so a secret cannot appear here.
+fixed finding fields (rule title, remediation, `path:line`) and fixed reason codes.
+Nothing from the command, the prompt, the file content or git configuration (keys or
+values, review L2) is ever echoed, so a secret cannot appear here.
 """
 
 from __future__ import annotations
 
+import re
 from typing import Final
 
 from ciso.common.activity import InspectionFinding, InspectionResult, Severity, clean_text
 
+#: A reason code: the only text from a refusal that is appended to a message (review L2).
+_CODE: Final = re.compile(r"[a-z_]{1,40}")
 #: Most findings named in one message; the rest are counted.
 MAX_NAMED_FINDINGS: Final = 5
 #: Longest message returned to Claude Code.
@@ -31,8 +35,15 @@ NOTES: Final[dict[str, str]] = {
     ),
     "push_config_redirect": (
         " This repository's git settings redirect or widen the push or run a program "
-        "during it, so what would be sent cannot be checked. Remove the settings named "
-        "here, or push it yourself: "
+        "during it, so what would be sent cannot be checked. Remove those settings (the "
+        "plugin README, 'Pushes without a sandbox', explains each reason code) or push it "
+        "yourself. Reason codes: "
+    ),
+    "repo_layout": (
+        " This repository's working tree or git folder is redirected (core.worktree, "
+        "core.bare, a .git file or a linked worktree), so the scan could read another "
+        "repository than the one that would push or commit. The person must push or "
+        "commit it by hand."
     ),
     "repo_hooks": (
         " This repository has its own git hook programs, which would run during the push "
@@ -96,8 +107,9 @@ def compose(
     text = explanation + findings_text(inspection)
     if note in NOTES:
         text += NOTES[note]
-        if names:
-            text += ", ".join(names) + "."
+        codes = [n for n in names if _CODE.fullmatch(n)]
+        if codes:
+            text += ", ".join(codes) + "."
     if inspection is not None and inspection.findings:
         text += _SKILL_HINT
     suffix = f" (CISO decision {decision_id})"

@@ -1,0 +1,32 @@
+# Runtime packages of the CISO agent plugin's hook and tool, pinned with SHA-256 hashes.
+# Used by hooks/hooks.json and the skill's tool command (`uv run --with-requirements`).
+# pydantic-core: the CPython 3.13 and 3.14 wheels for Windows (x64, arm64), macOS
+# (x86_64, arm64) and Linux (manylinux and musllinux, x86_64 and aarch64).
+# Hashes copied from uv's cached copy of the PyPI simple index (no download, no install).
+# NOTE (measured, uv 0.9.26): `uv run --with-requirements` does NOT verify these hashes;
+# `uv pip install --require-hashes -r <this file>` does. See README, "Machine requirements".
+annotated-types==0.8.0 \
+    --hash=sha256:f072f4d804ea359e4eaf198b1af7a8b0943881a87f31bb764f8bf219bb9419e0
+pydantic==2.14.0 \
+    --hash=sha256:15fab1bea6f1dc5003b54fc2ecab230c1fd1dbade2acd4addc52d81e32416d4b
+pydantic-core==2.50.0 \
+    --hash=sha256:049b0404792dcb942f1092bfdae5f819ef30445b0d174782e1909fbdd91bb48b \
+    --hash=sha256:8f16bc5bb12f4c581b0f40facc28dbf286db32d1bf4e7e4f4c4e0f7f4e34ecf9 \
+    --hash=sha256:d1d084e92d0f4a096a5155b23d1ac603db8073ef98a3d1384badf1455e5ae742 \
+    --hash=sha256:e58acd43ac8d3905659c1d5309318dd576243e723dd7c3b5dd4f555479b77d4b \
+    --hash=sha256:1773001198030e16f946a7ff7760fc3ebd45b12150f66fd0f433780043dc13d8 \
+    --hash=sha256:e15bb1535f68a27f28e579ba3a8f74e7b05d350c45f5622b76a311d5a19ae48a \
+    --hash=sha256:4f96ccd9368ecbf6685d8f6981584ab72b4f0ffd20685e747737e7e340277b8d \
+    --hash=sha256:a2b88f9f9fa52e1c34938ff1a18ee7fbffe482df0bb43c087a9a60578d273d68 \
+    --hash=sha256:62a93a9d206a3580c975c3c1f65a869cd063844d016c004f8d786a9309b3c591 \
+    --hash=sha256:5a8403eef4a66743e339102fb3cdd8c8b9016b8bd67924685893d062c88896f9 \
+    --hash=sha256:d8354fbbe2abf0fb724b9303bef43bfd9b7a2779332813fa6d6559983954e7d8 \
+    --hash=sha256:59f816dc04e99627a5a6352ae51dfb30e603f2cb0b7009c91dc640c533def014 \
+    --hash=sha256:4f31af62efd1fd0257735b72e6716b32d4f207654adeabfe524d44baf1bb6bed \
+    --hash=sha256:c05d035e72530f6b00297941b0162218601542b76870c3bf2756bd87f16fc538 \
+    --hash=sha256:63263d64884688554fb025a3906c7b00573980cfee75f9afeb86239d577384bc \
+    --hash=sha256:753863dd4317ec8cc9eb3e6d9d01a8ef1a1726a8003b4354658d68a1ae05f9db
+typing-extensions==4.16.0 \
+    --hash=sha256:481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8
+typing-inspection==0.4.5 \
+    --hash=sha256:bc210535442b39e1bf2805e0c7a17dfd6a4ace760c84c7f7d16245d23a6b1c39

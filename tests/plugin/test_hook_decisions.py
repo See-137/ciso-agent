@@ -198,13 +198,12 @@ def test_unwritable_findings_log_blocks_an_action_that_would_be_asked(
 
 def test_parallel_hooks_keep_one_chain(data: Path) -> None:
     import subprocess
-    import sys
 
-    from tests.plugin.conftest import HOOK
+    from tests.plugin.conftest import HOOK, runtime_python
 
     procs = [
         subprocess.Popen(  # noqa: S603 - fixed argv
-            [sys.executable, "-I", "-B", str(HOOK)],
+            [runtime_python(), "-I", "-B", str(HOOK)],
             stdin=subprocess.PIPE,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,

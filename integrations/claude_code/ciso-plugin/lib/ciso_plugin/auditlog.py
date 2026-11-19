@@ -2,9 +2,10 @@
 
 Each line is one record: `seq`, `at`, the record body, `prev` (the previous line's hash,
 64 zeros for the first) and `hash` = SHA-256 of `prev` + the canonical JSON of the line
-without `hash`. Editing, removing or reordering a line breaks the chain; `verify` finds
-it. The chain is tamper-EVIDENT for whoever reads it later, not tamper-proof: the file
-lives in a folder the user can write (README, "Limits").
+without `hash`. Editing, removing or reordering a line INSIDE the log breaks the chain;
+`verify` finds it. Nothing is anchored outside the user's control, so cutting lines off
+the end, deleting the file or recomputing the whole chain is NOT detected (review M5).
+The file lives in a folder the user can write (README, "Known limits").
 
 Writers hold an exclusive lock on a side file while they read the tail and append, so two
 hooks running at once (parallel tool calls) cannot fork the chain. A lock that cannot be

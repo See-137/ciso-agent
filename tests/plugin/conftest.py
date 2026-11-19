@@ -4,15 +4,19 @@ The plugin runs as its own process with an isolated interpreter (`-I`) and only 
 `lib/` on the path, exactly as Claude Code runs it; these tests do the same, so the code
 under test is the plugin's bundled copy, never `src/`. `CISO_PLUGIN_UNDER_TEST` points the
 tests at another copy of the plugin (the mutation runs use it).
+
+The interpreter is the environment uv builds for the declared hook command (review H1:
+the runtime guard refuses anything else). It is found once per session by running the
+declared uv command offline, so the pinned packages must be in the uv cache.
 """
 
 from __future__ import annotations
 
+import functools
 import json
 import os
 import shutil
 import subprocess
-import sys
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -32,6 +36,47 @@ MANAGED_ROOT = Path(
     or REPO_ROOT / "integrations" / "claude_code" / "managed-plugin"
 )
 GIT = shutil.which("git")
+UV = shutil.which("uv")
+
+
+def declared_uv_args(event: str = "PreToolUse", root: Path = PLUGIN_ROOT) -> list[str]:
+    """The hook's uv argv from `hooks/hooks.json`, with the plugin root filled in."""
+    data = json.loads((PLUGIN_ROOT / "hooks" / "hooks.json").read_text(encoding="utf-8"))
+    handler = data["hooks"][event][0]["hooks"][0]
+    assert handler["command"] == "uv"
+    return [a.replace("${CLAUDE_PLUGIN_ROOT}", str(root)) for a in handler["args"]]
+
+
+_FIND_ENV = (
+    "import pathlib, pydantic; p = pathlib.Path(pydantic.__file__).resolve(); "
+    "print(next(d for d in p.parents if (d / 'pyvenv.cfg').is_file()))"
+)
+
+
+@functools.cache
+def runtime_python() -> str:
+    """The python of the uv environment the declared hook command runs in."""
+    if UV is None:
+        pytest.fail("uv is not installed: the plugin tests need it (review H1)")
+    args = declared_uv_args()
+    head = args[: args.index("--") + 1]
+    done = subprocess.run(  # noqa: S603 - argv from the plugin's own hooks.json
+        [UV, *head, "python", "-I", "-B", "-c", _FIND_ENV],
+        capture_output=True,
+        text=True,
+        env={**os.environ, "UV_OFFLINE": "1"},
+        timeout=300,
+        check=False,
+    )
+    if done.returncode != 0:
+        pytest.fail("the pinned packages are not in the uv cache: " + done.stderr[-300:])
+    env = Path(done.stdout.strip())
+    for candidate in (env / "Scripts" / "python.exe", env / "bin" / "python"):
+        if candidate.is_file():
+            return str(candidate)
+    pytest.fail(f"no interpreter in the uv environment {env}")
+
+
 #: A cloud access key id built from fragments, so no secret shape sits in this file.
 PLANTED_KEY = "AK" + "IA" + "Q7RZ4KXN" + "2PLM8WBT"
 
@@ -87,8 +132,8 @@ def run_hook(
 ) -> HookRun:
     raw = payload if isinstance(payload, bytes) else json.dumps(payload).encode("utf-8")
     flags = ["-I", "-B"] if isolated else ["-B"]
-    done = subprocess.run(  # noqa: S603 - fixed argv, this interpreter
-        [sys.executable, *flags, str(hook_path)],
+    done = subprocess.run(  # noqa: S603 - fixed argv, the uv runtime
+        [runtime_python(), *flags, str(hook_path)],
         input=raw,
         capture_output=True,
         env=dict(env) if env is not None else base_env(data, extra_env),
@@ -103,8 +148,8 @@ def run_hook(
 
 
 def run_tool(args: list[str], data: Path) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(  # noqa: S603 - fixed argv, this interpreter
-        [sys.executable, "-I", "-B", str(TOOL), *args],
+    return subprocess.run(  # noqa: S603 - fixed argv, the uv runtime
+        [runtime_python(), "-I", "-B", str(TOOL), *args],
         capture_output=True,
         text=True,
         env=base_env(data),

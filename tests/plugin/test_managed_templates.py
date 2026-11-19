@@ -74,6 +74,7 @@ def test_templates_carry_every_control(tmp_path: Path) -> None:
         "safe.bareRepository": "explicit",
         "push.recurseSubmodules": "no",
         "protocol.ext.allow": "never",
+        "core.fsmonitor": "false",
         "core.hooksPath": "/usr/local/share/ciso-agent/empty-hooks",
     }
     assert (env["CISO_STOP"], env["CISO_ROLE"], env["CISO_AGENT_CLASS"]) == (
@@ -148,3 +149,140 @@ def test_plugin_hooks_cover_every_tool_and_the_prompt() -> None:
         assert handler["args"][-4:-1] == ["python", "-I", "-B"]
         assert "--no-config" in handler["args"]
         assert "--directory" in handler["args"]
+
+
+# --- review M4 / L1: the checker accepts only the exact controls ------------------------
+
+
+def _set_git(d: dict[str, Any], pairs: list[tuple[str, str]]) -> None:
+    env = {k: v for k, v in d["env"].items() if not k.startswith("GIT_CONFIG_")}
+    env["GIT_CONFIG_COUNT"] = str(len(pairs))
+    for index, (key, value) in enumerate(pairs):
+        env[f"GIT_CONFIG_KEY_{index}"] = key
+        env[f"GIT_CONFIG_VALUE_{index}"] = value
+    d["env"] = env
+
+
+def _git_pairs(d: dict[str, Any]) -> list[tuple[str, str]]:
+    env = d["env"]
+    return [
+        (env[f"GIT_CONFIG_KEY_{i}"], env[f"GIT_CONFIG_VALUE_{i}"])
+        for i in range(int(env["GIT_CONFIG_COUNT"]))
+    ]
+
+
+def _case_variant_undo(d: dict[str, Any]) -> None:
+    """Reviewer M4 step 2: git takes the LAST value of a case-insensitive key."""
+    _set_git(
+        d,
+        [*_git_pairs(d), ("core.hookspath", ".githooks"), ("Protocol.ext.allow", "always")],
+    )
+
+
+@pytest.mark.parametrize(
+    ("change", "expected"),
+    [
+        # reviewer M4 step 1
+        (lambda d: d["permissions"].pop("deny"), "permissions.deny"),
+        (lambda d: d["permissions"]["deny"].pop(), "permissions.deny"),
+        (lambda d: d.pop("requiredMinimumVersion"), "requiredMinimumVersion"),
+        (lambda d: d.__setitem__("requiredMinimumVersion", "2.1.200"), "requiredMinimumVersion"),
+        (lambda d: d.pop("disableCommandPluginSources"), "disableCommandPluginSources"),
+        (lambda d: d.pop("forceLoginOrgUUID"), "forceLoginOrgUUID"),
+        (lambda d: d.pop("forceLoginMethod"), "forceLoginMethod"),
+        (lambda d: d["env"].pop("UV_NO_CONFIG"), "UV_NO_CONFIG"),
+        # step 2
+        (_case_variant_undo, "git hardening"),
+        (
+            lambda d: _set_git(d, [*_git_pairs(d), ("SAFE.bareRepository", "explicit")]),
+            "more than once",
+        ),
+        (lambda d: d["env"].__setitem__("GIT_CONFIG_PARAMETERS", "'x.y'='z'"), "GIT_CONFIG"),
+        (lambda d: d["env"].__setitem__("git_config_count", "0"), "GIT_CONFIG"),
+        (lambda d: d["env"].__setitem__("ciso_stop", "1"), "case"),
+        # L1
+        (
+            lambda d: _set_git(d, [p for p in _git_pairs(d) if p[0] != "core.fsmonitor"]),
+            "core.fsmonitor",
+        ),
+        # step 3
+        (
+            lambda d: d["strictKnownMarketplaces"].append(
+                {"source": "git", "url": "https://other.example.invalid/m.git"}
+            ),
+            "strictKnownMarketplaces",
+        ),
+        (
+            lambda d: d["extraKnownMarketplaces"].__setitem__(
+                "other", {"source": {"source": "git", "url": "https://o.example.invalid"}}
+            ),
+            "extraKnownMarketplaces",
+        ),
+        # step 4
+        (lambda d: d["permissions"].__setitem__("defaultMode", "dontAsk"), "defaultMode"),
+        (
+            lambda d: d["permissions"].__setitem__("defaultMode", "bypassPermissions"),
+            "defaultMode",
+        ),
+        (lambda d: d["permissions"].__setitem__("allow", ["Bash(*)"]), "allow"),
+        (lambda d: d["permissions"].__setitem__("allow", ["Bash"]), "allow"),
+        (lambda d: d["permissions"].__setitem__("allow", ["Read(**)"]), "allow"),
+        # a hook other than the plugin's
+        (
+            lambda d: d.__setitem__(
+                "hooks",
+                {"PreToolUse": [{"matcher": "*", "hooks": [{"type": "command", "command": "x"}]}]},
+            ),
+            "hooks",
+        ),
+    ],
+)
+def test_reviewer_weakened_templates_are_invalid(
+    checker: ModuleType, tmp_path: Path, change: Any, expected: str
+) -> None:
+    folder = _filled(tmp_path)
+    _edit(folder, change)
+    code, lines = checker.check(folder, PLUGIN_ROOT)
+    assert code == 2, lines
+    assert any(expected in line for line in lines), lines
+
+
+def test_git_keys_in_another_case_are_the_same_keys(checker: ModuleType, tmp_path: Path) -> None:
+    """git compares section and key names case-insensitively: upper case is the same key."""
+    folder = _filled(tmp_path)
+    _edit(folder, lambda d: _set_git(d, [(k.upper(), v) for k, v in _git_pairs(d)]))
+    assert checker.check(folder, PLUGIN_ROOT) == (0, [])
+
+
+def test_a_narrow_allow_rule_is_accepted(checker: ModuleType, tmp_path: Path) -> None:
+    folder = _filled(tmp_path)
+    _edit(folder, lambda d: d["permissions"].__setitem__("allow", ["Bash(git status)"]))
+    assert checker.check(folder, PLUGIN_ROOT) == (0, [])
+
+
+def test_an_inert_plugin_hook_is_invalid(checker: ModuleType, tmp_path: Path) -> None:
+    """Reviewer M4 step 5: exec form, timeout and onFailure block, but not the CISO hook."""
+    plugin = tmp_path / "plugin"
+    shutil.copytree(PLUGIN_ROOT / "hooks", plugin / "hooks")
+    path = plugin / "hooks" / "hooks.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    for event in ("PreToolUse", "UserPromptSubmit"):
+        handler = data["hooks"][event][0]["hooks"][0]
+        handler["command"], handler["args"] = "cmd", ["/c", "exit", "0"]
+    path.write_text(json.dumps(data), encoding="utf-8")
+    code, lines = checker.check(_filled(tmp_path), plugin)
+    assert code == 2
+    assert any("ciso_hook.py" in line for line in lines), lines
+
+
+def test_checker_deny_list_is_the_template_deny_list(checker: ModuleType) -> None:
+    source = json.loads((MANAGED_ROOT / "source.json").read_text(encoding="utf-8"))
+    assert tuple(source["common"]["permissions"]["deny"]) == checker.REQUIRED_DENY
+    assert "Read(~/.claude/.credentials.json)" in checker.REQUIRED_DENY
+
+
+def test_checker_hook_argv_is_the_plugin_hook_argv(checker: ModuleType) -> None:
+    data = json.loads((PLUGIN_ROOT / "hooks" / "hooks.json").read_text(encoding="utf-8"))
+    for event in ("PreToolUse", "UserPromptSubmit"):
+        handler = data["hooks"][event][0]["hooks"][0]
+        assert handler["args"] == list(checker.HOOK_ARGS)

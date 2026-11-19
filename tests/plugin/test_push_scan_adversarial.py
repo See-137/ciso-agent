@@ -235,3 +235,107 @@ def test_more_commits_than_the_cap_refuses_the_push(repo: Repo, data: Path, tmp_
     run = run_hook(event, data, hook_path=hook)
     assert run.decision == "deny"
     assert _last_result(data)["note"] == "too_many_commits"
+
+
+# --- review H2: settings that re-root the scan ----------------------------------------
+
+
+def _clean_repo_b(repo: Repo) -> Path:
+    """Review H2's repository B: clean, with its own `origin` and `feature` branch."""
+    other = repo.work.parent / "clean-b"
+    git(repo.work.parent, "clone", "-q", str(repo.bare), str(other))
+    git(other, "checkout", "-q", "-b", "feature")
+    (other / "ok.py").write_text("ok = 1\n", encoding="utf-8")
+    git(other, "add", "ok.py")
+    git(other, "commit", "-q", "-m", "clean")
+    return other
+
+
+def test_core_worktree_pointing_at_another_repository_refuses_the_push(
+    repo: Repo, data: Path
+) -> None:
+    _feature(repo)
+    repo.commit("settings.py", f'TOKEN = "{PLANTED_KEY}"\n')
+    assert _push(repo, data).decision == "deny"  # baseline: the secret is found
+    other = _clean_repo_b(repo)
+    git(repo.work, "config", "core.worktree", str(other))
+    run = _push(repo, data)
+    assert run.decision == "deny"
+    assert _last_result(data)["note"] == "repo_layout"
+    assert repo.remote_ref("feature") == ""
+
+
+def test_core_worktree_refuses_the_commit_scan(repo: Repo, data: Path) -> None:
+    (repo.work / "c.py").write_text(f'TOKEN = "{PLANTED_KEY}"\n', encoding="utf-8")
+    git(repo.work, "add", "c.py")
+    other = _clean_repo_b(repo)
+    git(repo.work, "config", "core.worktree", str(other))
+    run = run_hook(repo.push_event("git commit -m wip"), data)
+    assert run.decision == "deny"
+    assert _last_result(data)["note"] == "repo_layout"
+
+
+def test_core_bare_refuses_the_push(repo: Repo, data: Path) -> None:
+    _feature(repo)
+    repo.commit("app.py", "print('ok')\n")
+    git(repo.work, "config", "core.bare", "true")
+    assert _push(repo, data).decision == "deny"
+
+
+def test_a_gitdir_redirect_refuses_the_push(repo: Repo, data: Path, tmp_path: Path) -> None:
+    work = tmp_path / "separate-work"
+    gitdir = tmp_path / "elsewhere.git"
+    git(tmp_path, "clone", "-q", "--separate-git-dir", str(gitdir), str(repo.bare), str(work))
+    git(work, "checkout", "-q", "-b", "feature")
+    (work / "app.py").write_text("print('ok')\n", encoding="utf-8")
+    git(work, "add", "app.py")
+    git(work, "commit", "-q", "-m", "c")
+    event = tool_event_for(work, "git push origin feature")
+    run = run_hook(event, data)
+    assert run.decision == "deny"
+    assert _last_result(data)["note"] == "repo_layout"
+
+
+def tool_event_for(work: Path, command: str) -> dict[str, Any]:
+    from tests.plugin.conftest import tool_event
+
+    return tool_event("Bash", {"command": command}, str(work), use_id="push")
+
+
+# --- review M1: a remote with two urls --------------------------------------------------
+
+
+def test_a_second_remote_url_refuses_the_push(repo: Repo, data: Path, tmp_path: Path) -> None:
+    repo.commit("old.py", f'TOKEN = "{PLANTED_KEY}"\n', "old")
+    git(repo.work, "push", "-q", "origin", "main")
+    git(repo.work, "fetch", "-q", "origin")
+    evil = tmp_path / "evil.git"
+    git(tmp_path, "init", "-q", "--bare", str(evil))
+    _feature(repo)
+    repo.commit("app.py", "print('ok')\n")
+    assert _push(repo, data).decision == "allow"  # baseline: one url
+    git(repo.work, "config", "--add", "remote.origin.url", str(evil))
+    run = _push(repo, data)
+    assert run.decision == "deny"
+    assert _last_result(data)["note"] == "push_config_redirect"
+    assert "remote_second_url" in run.message
+
+
+# --- review L2: no key names or values in the message ------------------------------------
+
+
+def test_deny_message_carries_codes_not_config_keys(repo: Repo, data: Path) -> None:
+    token = "tok" + "en" + "Q7RZ4KXN2PLM"
+    _feature(repo)
+    repo.commit("app.py", "print('ok')\n")
+    git(repo.work, "config", f"credential.https://u:{token}@example.invalid.helper", "store")
+    git(repo.work, "config", "remote.origin.receivepack", "git-receive-pack")
+    run = _push(repo, data)
+    assert run.decision == "deny"
+    text = run.stdout.casefold()
+    assert token.casefold() not in text
+    assert "example.invalid" not in text
+    assert "credential." not in text
+    assert "remote.origin" not in text
+    assert "credential_helper" in run.message
+    assert "remote_receive_pack" in run.message

@@ -1,19 +1,9 @@
-# /// script
-# requires-python = ">=3.13"
-# dependencies = [
-#     "pydantic==2.14.0",
-#     "pydantic-core==2.50.0",
-#     "typing-extensions==4.16.0",
-#     "annotated-types==0.8.0",
-#     "typing-inspection==0.4.5",
-# ]
-# ///
 """Enforcing hook of the CISO agent plugin (PreToolUse for every tool, UserPromptSubmit).
 
-Run by `hooks/hooks.json` as `uv run ... -- python -I -B <this file>`: uv provides Python
-3.13+ and the pinned packages above (PEP 723 inline metadata); `-I` keeps the user's
-environment (PYTHONPATH, PYTHONSTARTUP, user site, the working directory) out of the
-interpreter. This file only checks the runtime and hands over to `lib/ciso_plugin`.
+Run by `hooks/hooks.json` as `uv run --isolated <fixed flags> --with-requirements
+scripts/runtime-requirements.txt -- python -I -B <this file>`. Before anything from the
+bundle is imported, `scripts/runtime_guard.py` (loaded by its path) refuses a runtime that
+is not uv's own isolated environment (review H1). Then it hands over to `lib/ciso_plugin`.
 Written for any Python 3 so an old interpreter reaches the message below.
 """
 
@@ -32,6 +22,18 @@ def _refuse(reason):
     return 2
 
 
+def _guard(folder):
+    import importlib.util
+
+    path = folder / "runtime_guard.py"
+    spec = importlib.util.spec_from_file_location("_ciso_runtime_guard", path)
+    if spec is None or spec.loader is None:
+        return "runtime guard missing"
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.check_current()
+
+
 def _main():
     if tuple(sys.version_info)[:2] < (3, 13):
         return _refuse("Python older than 3.13")
@@ -39,8 +41,11 @@ def _main():
         return _refuse("interpreter not started in isolated mode -I")
     from pathlib import Path
 
-    lib = Path(__file__).resolve().parent.parent / "lib"
-    sys.path.insert(0, str(lib))
+    here = Path(__file__).resolve().parent
+    problem = _guard(here)
+    if problem:
+        return _refuse(problem)
+    sys.path.insert(0, str(here.parent / "lib"))
     import importlib.util
 
     if importlib.util.find_spec("pydantic") is None:

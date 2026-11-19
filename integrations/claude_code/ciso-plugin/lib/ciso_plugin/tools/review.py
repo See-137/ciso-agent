@@ -5,11 +5,18 @@ Whole-repository review inspects every tracked file (or, outside git, every file
 the folder except `.git`, `node_modules` and virtual environments) as if it were being
 written: the path against the sensitive-path rules, the content for secrets, risky code
 and scan-suppression tricks. Binary and oversized files are counted as not inspected.
+
+Links are never followed (review L3): a symbolic link or junction anywhere on a file's
+path below the root, or a file whose resolved path is outside the resolved root, is
+skipped and counted; directory walks do not descend into links; files are read with a
+bounded read.
 """
 
 from __future__ import annotations
 
+import os
 import re
+import stat
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Final
@@ -35,8 +42,45 @@ class ReviewResult:
     inspected: int = 0
     skipped_binary: int = 0
     skipped_large: int = 0
+    skipped_links: int = 0
     incomplete: bool = False
     notes: list[str] = field(default_factory=list)
+
+
+def _is_link(path: Path) -> bool:
+    try:
+        info = os.lstat(path)
+    except OSError:
+        return True  # unreadable: treat as unsafe
+    if stat.S_ISLNK(info.st_mode):
+        return True
+    return path.is_junction()
+
+
+def _within(root: Path, path: Path) -> bool:
+    """True when no component of `path` below `root` is a link and the resolved path
+    stays inside the resolved root."""
+    try:
+        relative = path.relative_to(root)
+        current = root
+        for part in relative.parts:
+            current = current / part
+            if _is_link(current):
+                return False
+        path.resolve(strict=True).relative_to(root.resolve(strict=True))
+    except (OSError, ValueError):
+        return False
+    return True
+
+
+def _walk(root: Path) -> list[Path]:
+    """Every regular file under `root`, never descending into a link."""
+    out: list[Path] = []
+    for folder, dirs, files in os.walk(root, followlinks=False):
+        base = Path(folder)
+        dirs[:] = sorted(d for d in dirs if d not in _SKIP_DIRS and not _is_link(base / d))
+        out.extend(base / name for name in sorted(files))
+    return out
 
 
 def _tracked_files(git: SafeGit | None, root: Path) -> list[Path]:
@@ -45,13 +89,14 @@ def _tracked_files(git: SafeGit | None, root: Path) -> list[Path]:
         if result.returncode == 0:
             names = result.stdout.decode("utf-8", errors="replace").split("\0")
             return [root / n for n in names if n]
-    out = []
-    for path in root.rglob("*"):
-        if any(part in _SKIP_DIRS for part in path.relative_to(root).parts):
-            continue
-        if path.is_file():
-            out.append(path)
-    return out
+    return _walk(root)
+
+
+def _read_bounded(path: Path, limit: int) -> bytes:
+    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(path, flags)
+    with os.fdopen(fd, "rb") as handle:
+        return handle.read(limit)
 
 
 def _add(result: ReviewResult, inspection: InspectionResult) -> None:
@@ -68,9 +113,12 @@ def review_files(root: Path, git: SafeGit | None) -> ReviewResult:
         result.incomplete = True
         files = files[:MAX_REVIEW_FILES]
     for path in files:
+        if not _within(root, path):
+            result.skipped_links += 1
+            continue
         if not path.is_file():
             continue
-        raw = path.read_bytes()[: MAX_CONTENT_CHARS * 4 + 1]
+        raw = _read_bounded(path, MAX_CONTENT_CHARS * 4 + 1)
         if b"\0" in raw[:8192]:
             result.skipped_binary += 1
             continue
@@ -143,6 +191,11 @@ def coverage_notes(result: ReviewResult) -> list[str]:
         notes.append(
             f"Not inspected: {result.skipped_binary} binary and {result.skipped_large} "
             "oversized files."
+        )
+    if result.skipped_links:
+        notes.append(
+            f"Not inspected: {result.skipped_links} paths that are links or lead outside "
+            "the folder (links are never followed)."
         )
     if result.incomplete:
         notes.append("Some content could not be fully inspected (see coverage findings).")

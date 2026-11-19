@@ -14,11 +14,23 @@ CWD = str(Path(__file__).resolve().parent)
 
 
 def _command(
-    data: Path, tail: str, *, root: Path = PLUGIN_ROOT, tool: Path = TOOL, run: Path | None = None
+    data: Path,
+    tail: str,
+    *,
+    root: Path = PLUGIN_ROOT,
+    tool: Path = TOOL,
+    run: Path | None = None,
+    isolated: str = "--isolated ",
 ) -> str:
+    """The SKILL.md command shape; `tool` is the requirements file position (it was the
+    tool script before review H1, now the plugin's runtime requirements)."""
+    requirements = tool if tool != TOOL else PLUGIN_ROOT / "scripts" / "runtime-requirements.txt"
     return (
-        f'uv run --quiet --no-config --no-project --python 3.13 --directory "{root}" '
-        f'--with-requirements "{tool}" -- python -I -B "{run or tool}" {tail}'
+        f"uv run --quiet {isolated}--no-config --no-project --no-env-file --python 3.13 "
+        "--default-index https://pypi.org/simple --index https://pypi.org/simple "
+        f'--find-links "{root}/scripts/no-local-packages" --index-strategy first-index '
+        f'--keyring-provider disabled --no-build --directory "{root}" '
+        f'--with-requirements "{requirements}" -- python -I -B "{run or TOOL}" {tail}'
     ).replace("{data}", str(data))
 
 
@@ -95,7 +107,7 @@ def test_powershell_tool_is_not_recognised(hook: Callable[..., HookRun], data: P
 
 def test_loading_this_skill_is_allowed_and_another_is_not(hook: Callable[..., HookRun]) -> None:
     assert hook(tool_event("Skill", {"skill": "ciso-agent:ciso"}, CWD)).decision == "allow"
-    assert hook(tool_event("Skill", {"skill": "ciso"}, CWD, use_id="t2")).decision == "allow"
+    assert hook(tool_event("Skill", {"skill": "ciso"}, CWD, use_id="t2")).decision == "ask"
     other = hook(tool_event("Skill", {"skill": "deploy:prod"}, CWD, use_id="t3"))
     assert other.decision == "ask"
 
@@ -103,5 +115,13 @@ def test_loading_this_skill_is_allowed_and_another_is_not(hook: Callable[..., Ho
 def test_own_tool_needs_a_writable_audit_log(hook: Callable[..., HookRun], data: Path) -> None:
     (data / "audit").mkdir()
     (data / "audit" / "decisions.jsonl").mkdir()
-    run = hook(tool_event("Skill", {"skill": "ciso"}, CWD))
+    run = hook(tool_event("Skill", {"skill": "ciso-agent:ciso"}, CWD))
     assert run.decision == "deny"
+
+
+def test_the_shape_without_isolation_is_not_the_own_tool(
+    hook: Callable[..., HookRun], data: Path
+) -> None:
+    """Review H1: the earlier command let uv pick a discovered venv."""
+    command = _command(data, 'summary --data-dir "{data}"', isolated="")
+    assert hook(tool_event("Bash", {"command": command}, CWD)).decision in {"ask", "deny"}

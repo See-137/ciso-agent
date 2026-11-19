@@ -6,7 +6,10 @@ Order (the same steps as the service's pipeline, `ciso.app.governance_pipeline`)
    OS account as an unverified claim. The intake's redactor is a pass-through: the command
    and content are classified and inspected as written and never stored;
 2. attribute locally (`identity.LocalAttribution`);
-3. the plugin's own skill and tool are allowed on their exact shapes (`selfcmd`);
+3. the plugin's own skill and tool are allowed on their exact shapes (`selfcmd`), but
+   only for a verified person with a valid role, and while the stop flag is engaged only
+   the parts that write nothing (loading the skill, `summary`); anything else of theirs
+   goes to the engine like any other command (review M3);
 4. inspect: a push or commit through its git scan (`pushscan`), anything else that
    carries text (file writes and edits, prompts, shell commands, sub-agent prompts) with
    the bundled `Inspector`;
@@ -39,7 +42,7 @@ from ciso.common.activity import (
     Verdict,
 )
 from ciso.common.clock import Clock
-from ciso.common.enums import ActorType, AuditOutcome
+from ciso.common.enums import ActorType, AuditOutcome, InformationState
 from ciso.common.ids import new_id
 from ciso.common.protocols import AuditEvent
 from ciso.governance import (
@@ -60,8 +63,8 @@ from ciso_plugin.auditlog import ChainedLog, LocalAuditSink, NullAuditSink
 from ciso_plugin.gitrun import GitError, SafeGit
 from ciso_plugin.identity import LocalAttribution, LocalPrincipals
 from ciso_plugin.pushscan import ScanRefused, scan_commit, scan_push
-from ciso_plugin.selfcmd import own_invocation
-from ciso_plugin.settings import EnvKillSwitch, PluginSettings
+from ciso_plugin.selfcmd import own_invocation, writes_nothing
+from ciso_plugin.settings import EnvKillSwitch, PluginSettings, stop_engaged
 
 logger = logging.getLogger(__name__)
 
@@ -166,10 +169,12 @@ class Decider:
         action = report.action
         attribution = self._attribution.attribute(action)
         tool_input = payload.get("tool_input")
-        own = isinstance(tool_input, dict) and own_invocation(
-            action.tool_name, tool_input, self._ctx.plugin_root, self._ctx.data
+        own = (
+            own_invocation(action.tool_name, tool_input, self._ctx.plugin_root, self._ctx.data)
+            if isinstance(tool_input, dict)
+            else None
         )
-        if event == "PreToolUse" and own:
+        if event == "PreToolUse" and own is not None and self._own_permitted(own, attribution):
             return self._own_tool(action)
         try:
             inspection, note, names = self._inspect(action, attribution, report.inspection)
@@ -192,6 +197,14 @@ class Decider:
                 names=names,
             )
         return Outcome(decision.verdict, decision.decision_id, message)
+
+    def _own_permitted(self, part: str, attribution: Attribution) -> bool:
+        """The own skill and tool skip the engine only for a verified person with a valid
+        role, and under the stop flag only when they write nothing (review M3)."""
+        settings = self._ctx.settings
+        if attribution.state is not InformationState.VERIFIED or settings.role is None:
+            return False
+        return not stop_engaged(settings.stop_raw) or writes_nothing(part)
 
     def _request(self, event: str, payload: Mapping[str, Any]) -> dict[str, Any]:
         claims = []

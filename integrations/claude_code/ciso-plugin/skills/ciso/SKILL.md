@@ -2,7 +2,7 @@
 name: ciso
 description: The organization's CISO agent. Use it to review code, a diff, a commit range or a whole repository for secrets, sensitive files, risky code and scanner-suppression tricks; to check whether a command or planned action is allowed and why; to audit a repository's or this machine's agent setup (MCP servers, instruction files, permission settings, hooks); to summarise the local findings and decision log; and for AI-use rules (what data may go to which AI tool, what to do after a refusal, how to request an exception).
 argument-hint: "[review | check <command> | audit-setup | summary | policy question]"
-allowed-tools: Bash(uv run --quiet --no-config --no-project *)
+allowed-tools: Bash(uv run --quiet --isolated --no-config --no-project *)
 ---
 
 # CISO agent
@@ -29,7 +29,7 @@ All checks run one read-only tool through uv. Use exactly this form with the Bas
 program). Use absolute paths and no shell operators.
 
 ```
-uv run --quiet --no-config --no-project --python 3.13 --directory "${CLAUDE_PLUGIN_ROOT}" --with-requirements "${CLAUDE_SKILL_DIR}/scripts/ciso_tool.py" -- python -I -B "${CLAUDE_SKILL_DIR}/scripts/ciso_tool.py" <subcommand> <options>
+uv run --quiet --isolated --no-config --no-project --no-env-file --python 3.13 --default-index https://pypi.org/simple --index https://pypi.org/simple --find-links "${CLAUDE_PLUGIN_ROOT}/scripts/no-local-packages" --index-strategy first-index --keyring-provider disabled --no-build --directory "${CLAUDE_PLUGIN_ROOT}" --with-requirements "${CLAUDE_PLUGIN_ROOT}/scripts/runtime-requirements.txt" -- python -I -B "${CLAUDE_SKILL_DIR}/scripts/ciso_tool.py" <subcommand> <options>
 ```
 
 | Task | Subcommand and options |
@@ -61,8 +61,11 @@ quotes) cannot be passed safely: explain it from the rules in
    their machine). Explain each risky setting and the safer setting. See
    [references/setup-audit.md](references/setup-audit.md).
 4. **Summarise findings**: run `summary`. Report decisions, top reasons, open findings
-   with their fixes, and whether both hash chains are intact. A broken chain means the
-   log was edited: tell the person to report it to the security team.
+   with their fixes, and the hash-chain result exactly as the tool words it. The chain
+   only detects an edited or removed line INSIDE the log; it cannot detect a log cut
+   short or rewritten from the start, so never call the log "intact" or "untampered".
+   A broken chain means a line was edited: tell the person to report it to the security
+   team.
 5. **AI-use questions** (what data may go to which AI tool, a refusal, an exception):
    answer from [references/ai-use-policy.md](references/ai-use-policy.md). If the policy
    does not cover the case, say so and point to the security team.

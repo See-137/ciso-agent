@@ -34,6 +34,9 @@ CREDENTIAL_PATHS: tuple[str, ...] = (
     "**/credentials",
     "**/credentials.json",
     "**/credentials.xml",
+    # A generic hidden credentials file; coding assistants keep their login token in one
+    # (review M6). The product-named files are in the deployment's additions.
+    "**/.credentials.json",
     "**/*.credentials",
     "**/.vault-token",
     "**/.kube/config",

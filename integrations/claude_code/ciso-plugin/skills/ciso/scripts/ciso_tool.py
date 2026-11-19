@@ -1,17 +1,9 @@
-# /// script
-# requires-python = ">=3.13"
-# dependencies = [
-#     "pydantic==2.14.0",
-#     "pydantic-core==2.50.0",
-#     "typing-extensions==4.16.0",
-#     "annotated-types==0.8.0",
-#     "typing-inspection==0.4.5",
-# ]
-# ///
 """The CISO skill's read-only tool: review, check, audit-setup, summary.
 
-Run as the skill describes (`uv run ... -- python -I -B <this file> <subcommand> ...`).
-Written for any Python 3 so an old interpreter reaches the message below.
+Run as the skill describes (`uv run --isolated <fixed flags> ... -- python -I -B <this
+file> <subcommand> ...`). The plugin's runtime guard (`scripts/runtime_guard.py`, loaded
+by its path) refuses any runtime that is not uv's own isolated environment before the
+bundle is imported. Written for any Python 3 so an old interpreter reaches the message.
 """
 
 import sys
@@ -23,12 +15,23 @@ def _main():
             "ciso_tool: needs Python 3.13+ started with -I (run it through uv as the skill says)\n"
         )
         return 1
+    import importlib.util
     from pathlib import Path
 
     root = Path(__file__).resolve().parents[3]
+    spec = importlib.util.spec_from_file_location(
+        "_ciso_runtime_guard", root / "scripts" / "runtime_guard.py"
+    )
+    if spec is None or spec.loader is None:
+        sys.stderr.write("ciso_tool: runtime guard missing\n")
+        return 1
+    guard = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(guard)
+    problem = guard.check_current()
+    if problem:
+        sys.stderr.write("ciso_tool: refused runtime (" + problem + "); run it through uv\n")
+        return 1
     sys.path.insert(0, str(root / "lib"))
-    import importlib.util
-
     if importlib.util.find_spec("pydantic") is None:
         sys.stderr.write("ciso_tool: pydantic is not installed (run it through uv)\n")
         return 1

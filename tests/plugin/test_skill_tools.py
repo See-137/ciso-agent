@@ -110,7 +110,7 @@ def test_summary_reports_decisions_and_detects_a_broken_chain(
         tool_event("Write", {"file_path": CWD + "/a.py", "content": f'k = "{PLANTED_KEY}"\n'}, CWD)
     )
     done = run_tool(["summary", "--data-dir", str(data)], data)
-    assert "hash chain intact" in done.stdout
+    assert "no edits detected in" in done.stdout
     assert "deny 1" in done.stdout
     assert "secret.cloud_access_key" in done.stdout
     log = data / "audit" / "decisions.jsonl"

@@ -44,7 +44,20 @@
         "Read(~/.aws/credentials)",
         "Read(~/.git-credentials)",
         "Read(//**/.env)",
-        "Read(//**/.env.*)"
+        "Read(//**/.env.*)",
+        "Read(~/.claude/.credentials.json)",
+        "Read(~/.claude.json)",
+        "Read(//**/.credentials.json)",
+        "Read(~/.config/anthropic/**)",
+        "Read(~/AppData/Roaming/Anthropic/**)",
+        "Edit(~/AppData/Local/uv/**)",
+        "Write(~/AppData/Local/uv/**)",
+        "Edit(~/AppData/Roaming/uv/**)",
+        "Write(~/AppData/Roaming/uv/**)",
+        "Edit(~/.cache/uv/**)",
+        "Write(~/.cache/uv/**)",
+        "Edit(~/.local/share/uv/**)",
+        "Write(~/.local/share/uv/**)"
       ]
     },
     "env": {
@@ -55,9 +68,22 @@
     }
   },
   "git_hardening": [
-    ["safe.bareRepository", "explicit"],
-    ["push.recurseSubmodules", "no"],
-    ["protocol.ext.allow", "never"]
+    [
+      "safe.bareRepository",
+      "explicit"
+    ],
+    [
+      "push.recurseSubmodules",
+      "no"
+    ],
+    [
+      "protocol.ext.allow",
+      "never"
+    ],
+    [
+      "core.fsmonitor",
+      "false"
+    ]
   ],
   "platforms": {
     "windows": {

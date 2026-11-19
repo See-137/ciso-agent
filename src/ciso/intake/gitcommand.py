@@ -10,9 +10,14 @@ the worst, decides. A command is refined only when ALL of these hold:
 - the program is `git`, and the only global option is at most one `-C <dir>` (`-c`,
   `--exec-path`, `--git-dir`, `--work-tree`, `--namespace` and every other global option
   stop the refinement, since they can change what git runs or where it writes);
-- for a push: none of `--receive-pack`, `--exec`, `-o`/`--push-option`, `--repo`,
-  `--mirror`, `--all`, `--tags`, `--branches`, and at most one refspec. A `+` refspec or a
-  force flag is recorded as `force`.
+- for a push: every long option is resolved to the full git push option it uniquely
+  prefixes, as git itself does (`--recei=x` is `--receive-pack=x`, queue Q22); an unknown
+  or ambiguous option stops the refinement. None of `--receive-pack`, `--exec`,
+  `-o`/`--push-option`, `--repo`, `--mirror`, `--all`, `--tags`, `--branches`,
+  `--delete`, `--prune`, `--follow-tags`, `--recurse-submodules`; no short cluster
+  holding `o` or `d`, or an unknown short flag; at most one refspec. A `+` refspec or a
+  force flag (`-f`, `--force`, `--force-with-lease`, `--force-if-includes`, however
+  abbreviated) is recorded as `force`.
 
 A remote URL loses any user-info part (`user:token@`). The command handed in is already
 redacted.
@@ -30,21 +35,58 @@ _OPERATOR_CHARS = frozenset("();<>|&")
 #: Characters that make the shell expand or re-quote a word; their presence stops refinement.
 _EXPANDING_CHARS = frozenset("$`\\!*?[]{}~\n\r")
 _GIT_PROGRAMS = frozenset({"git", "git.exe"})
-#: Push options that run a program on the remote, attach data, or widen what is pushed.
+#: Every long option of `git push` -> whether it takes a value ("required", "optional",
+#: "none"). Kept equal to `ciso.governance.git_argv.PUSH_LONG_OPTIONS` by a test.
+PUSH_LONG_OPTIONS: dict[str, str] = {
+    "verbose": "none",
+    "quiet": "none",
+    "repo": "required",
+    "all": "none",
+    "branches": "none",
+    "mirror": "none",
+    "delete": "none",
+    "tags": "none",
+    "dry-run": "none",
+    "porcelain": "none",
+    "force": "none",
+    "force-with-lease": "optional",
+    "force-if-includes": "none",
+    "recurse-submodules": "required",
+    "thin": "none",
+    "receive-pack": "required",
+    "exec": "required",
+    "set-upstream": "none",
+    "progress": "none",
+    "prune": "none",
+    "no-verify": "none",
+    "follow-tags": "none",
+    "signed": "optional",
+    "atomic": "none",
+    "push-option": "required",
+    "ipv4": "none",
+    "ipv6": "none",
+}
+#: Push options that run a program, attach data, widen or delete what is pushed.
 _PUSH_REFUSED = frozenset(
     {
-        "--receive-pack",
-        "--exec",
-        "-o",
-        "--push-option",
-        "--repo",
-        "--mirror",
-        "--all",
-        "--tags",
-        "--branches",
+        "receive-pack",
+        "exec",
+        "push-option",
+        "repo",
+        "mirror",
+        "all",
+        "tags",
+        "branches",
+        "delete",
+        "prune",
+        "follow-tags",
+        "recurse-submodules",
     }
 )
-_FORCE_FLAGS = frozenset({"-f", "--force"})
+_FORCE_OPTIONS = frozenset({"force", "force-with-lease", "force-if-includes"})
+#: Short push flags git knows; `o` (push option) and `d` (delete) refuse the refinement.
+_SHORT_FLAGS = frozenset("vqnfdu46o")
+_SHORT_REFUSED = frozenset("od")
 _USERINFO = re.compile(r"(?<=://)[^/@]*@")
 _HEADS = "refs/heads/"
 
@@ -77,21 +119,57 @@ def _subcommand(tokens: list[str]) -> tuple[str, list[str]] | None:
     return rest[0], rest[1:]
 
 
-def _option_name(arg: str) -> str:
-    return arg.split("=", 1)[0] if arg.startswith("--") else arg
+def _spellings() -> dict[str, tuple[str, bool]]:
+    """Every accepted spelling -> (option, negated): `x`, `no-x`, and `x` for `no-x`."""
+    out: dict[str, tuple[str, bool]] = {}
+    for name in PUSH_LONG_OPTIONS:
+        out[name] = (name, False)
+        out["no-" + name] = (name, True)
+        if name.startswith("no-"):
+            out[name[3:]] = (name, True)
+    return out
+
+
+_SPELLINGS = _spellings()
+
+
+def resolve_long(arg: str) -> tuple[str, bool, str | None] | None:
+    """`(option, negated, inline value)` for `--<name>[=value]`, resolving a unique
+    abbreviation the way git does; None when unknown or ambiguous."""
+    name, eq, value = arg[2:].partition("=")
+    if not name:
+        return None
+    exact = _SPELLINGS.get(name)
+    if exact is None:
+        found = {hit for spelled, hit in _SPELLINGS.items() if spelled.startswith(name)}
+        if len(found) != 1:
+            return None
+        exact = found.pop()
+    return exact[0], exact[1], value if eq else None
 
 
 def _push_target(args: list[str]) -> dict[str, str] | None:
     """Remote, branch and force from push arguments, or None when not plain."""
     positional: list[str] = []
     target: dict[str, str] = {}
+    options_done = False
     for arg in args:
-        if _option_name(arg) in _PUSH_REFUSED:
-            return None
-        if arg in _FORCE_FLAGS or _option_name(arg) == "--force-with-lease":
-            target["force"] = "true"
-        if not arg.startswith("-"):
+        if options_done or not arg.startswith("-") or arg == "-":
             positional.append(arg)
+        elif arg == "--":
+            options_done = True
+        elif arg.startswith("--"):
+            resolved = resolve_long(arg)
+            if resolved is None or resolved[0] in _PUSH_REFUSED:
+                return None
+            if resolved[0] in _FORCE_OPTIONS and not resolved[1]:
+                target["force"] = "true"
+        else:
+            letters = set(arg[1:])
+            if not letters <= _SHORT_FLAGS or letters & _SHORT_REFUSED:
+                return None
+            if "f" in letters:
+                target["force"] = "true"
     if len(positional) > 2:
         return None
     if positional:

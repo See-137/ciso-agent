@@ -10,7 +10,9 @@ never forks them:
   file is a byte-for-byte copy. The one exception is `ciso/app/__init__.py`, which in the
   source wires the whole service; the bundle gets the fixed stub `APP_INIT_STUB` instead.
 - `rules/governance-ruleset.json`: the deployment ruleset
-  (`config/governance-ruleset.provisional.json`), byte-for-byte.
+  (`config/governance-ruleset.provisional.json`) plus `PLUGIN_ADDITIONS`: the assistant's
+  own credential files (review M6) and the folders uv runs the hook from (review H1),
+  which the vendor-neutral core may not name. Patterns are only ever added.
 - `lib/BUNDLE.json`: what was copied, from where, with SHA-256 of each file.
 - `integrations/claude_code/managed-plugin/<platform>/managed-settings.json`: generated
   from `managed-plugin/source.json` (see that folder's README).
@@ -46,6 +48,30 @@ MANAGED: Final = ROOT / "integrations" / "claude_code" / "managed-plugin"
 RULESET_SOURCE: Final = ROOT / "config" / "governance-ruleset.provisional.json"
 RULESET_TARGET: Final = Path("rules") / "governance-ruleset.json"
 MANIFEST: Final = Path("lib") / "BUNDLE.json"
+
+#: Patterns ADDED to the deployment ruleset's lists in the plugin's ruleset.
+PLUGIN_ADDITIONS: Final[dict[str, tuple[str, ...]]] = {
+    # Review M6: the assistant's login and account files (authentication docs: the
+    # `.credentials.json` file in the configuration folder, the `~/.claude.json` account
+    # and MCP file, and the platform SDK's profile folder). The generic
+    # `**/.credentials.json` is in the core's built-in list.
+    "credential_paths": (
+        "**/.claude.json",
+        "**/.claude/.credentials.json",
+        "**/.config/anthropic/**",
+        "**/AppData/Roaming/Anthropic/**",
+    ),
+    # Review H1: the uv cache and uv-managed Python folders the hook runs from. An agent
+    # write there would run before every hook check.
+    "agent_config_paths": (
+        "**/AppData/Local/uv/**",
+        "**/AppData/Roaming/uv/**",
+        "**/.cache/uv/**",
+        "**/.local/share/uv/**",
+        "**/Library/Caches/uv/**",
+    ),
+}
+PLUGIN_VERSION_SUFFIX: Final = ".plugin"
 
 #: Modules the plugin imports. Their import closure is bundled.
 ENTRY_MODULES: Final = (
@@ -155,7 +181,7 @@ def bundle_files() -> dict[Path, bytes]:
             files[target] = STUBS[module].encode("utf-8")
         else:
             files[target] = (SRC / target.relative_to("lib")).read_bytes()
-    files[RULESET_TARGET] = RULESET_SOURCE.read_bytes()
+    files[RULESET_TARGET] = plugin_ruleset(RULESET_SOURCE.read_bytes())
     manifest = {
         "generated_by": "tools/build_ciso_plugin.py",
         "entry_modules": list(ENTRY_MODULES),
@@ -168,6 +194,22 @@ def bundle_files() -> dict[Path, bytes]:
     }
     files[MANIFEST] = (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode("utf-8")
     return files
+
+
+def plugin_ruleset(source: bytes) -> bytes:
+    """The deployment ruleset with `PLUGIN_ADDITIONS` appended (never removed)."""
+    data = json.loads(source.decode("utf-8"))
+    for key, extra in PLUGIN_ADDITIONS.items():
+        current = list(data.get(key, []))
+        data[key] = current + [p for p in extra if p not in current]
+    data["version"] = str(data["version"]) + PLUGIN_VERSION_SUFFIX
+    data["description"] = (
+        str(data["description"])
+        + " CISO agent plugin copy (tools/build_ciso_plugin.py): plus the plugin's "
+        "additions to credential_paths and agent_config_paths."
+    )
+    text = json.dumps(data, indent=2, ensure_ascii=False) + chr(10)
+    return text.encode("utf-8")
 
 
 # --- managed settings templates --------------------------------------------------------

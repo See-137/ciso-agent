@@ -68,9 +68,21 @@ def test_a_missing_module_fails_the_isolated_import(build: ModuleType, tmp_path:
     assert build.isolated_import_problem(plugin) is not None
 
 
-def test_the_ruleset_is_the_deployment_ruleset(build: ModuleType) -> None:
-    bundled = (build.PLUGIN / "rules" / "governance-ruleset.json").read_bytes()
-    assert bundled == (REPO_ROOT / "config" / "governance-ruleset.provisional.json").read_bytes()
+def test_the_ruleset_is_the_deployment_ruleset_plus_the_plugin_additions(
+    build: ModuleType,
+) -> None:
+    import json
+
+    bundled = json.loads((build.PLUGIN / "rules" / "governance-ruleset.json").read_bytes())
+    source = json.loads((REPO_ROOT / "config" / "governance-ruleset.provisional.json").read_bytes())
+    for key, value in source.items():
+        if key in build.PLUGIN_ADDITIONS:
+            assert bundled[key][: len(value)] == value  # only added to
+            assert set(build.PLUGIN_ADDITIONS[key]) <= set(bundled[key])
+        elif key not in ("version", "description"):
+            assert bundled[key] == value, key
+    assert bundled["version"] == source["version"] + ".plugin"
+    assert "**/.claude/.credentials.json" in bundled["credential_paths"]
 
 
 def test_apps_zip_holds_the_skill_folder_without_scripts(build: ModuleType, tmp_path: Path) -> None:

@@ -38,7 +38,20 @@
       "Read(~/.aws/credentials)",
       "Read(~/.git-credentials)",
       "Read(//**/.env)",
-      "Read(//**/.env.*)"
+      "Read(//**/.env.*)",
+      "Read(~/.claude/.credentials.json)",
+      "Read(~/.claude.json)",
+      "Read(//**/.credentials.json)",
+      "Read(~/.config/anthropic/**)",
+      "Read(~/AppData/Roaming/Anthropic/**)",
+      "Edit(~/AppData/Local/uv/**)",
+      "Write(~/AppData/Local/uv/**)",
+      "Edit(~/AppData/Roaming/uv/**)",
+      "Write(~/AppData/Roaming/uv/**)",
+      "Edit(~/.cache/uv/**)",
+      "Write(~/.cache/uv/**)",
+      "Edit(~/.local/share/uv/**)",
+      "Write(~/.local/share/uv/**)"
     ]
   },
   "env": {
@@ -46,15 +59,17 @@
     "CISO_GIT_PATH": "/usr/bin/git",
     "CISO_ROLE": "employee",
     "CISO_STOP": "0",
-    "GIT_CONFIG_COUNT": "4",
+    "GIT_CONFIG_COUNT": "5",
     "GIT_CONFIG_KEY_0": "safe.bareRepository",
     "GIT_CONFIG_KEY_1": "push.recurseSubmodules",
     "GIT_CONFIG_KEY_2": "protocol.ext.allow",
-    "GIT_CONFIG_KEY_3": "core.hooksPath",
+    "GIT_CONFIG_KEY_3": "core.fsmonitor",
+    "GIT_CONFIG_KEY_4": "core.hooksPath",
     "GIT_CONFIG_VALUE_0": "explicit",
     "GIT_CONFIG_VALUE_1": "no",
     "GIT_CONFIG_VALUE_2": "never",
-    "GIT_CONFIG_VALUE_3": "/usr/local/share/ciso-agent/empty-hooks",
+    "GIT_CONFIG_VALUE_3": "false",
+    "GIT_CONFIG_VALUE_4": "/usr/local/share/ciso-agent/empty-hooks",
     "UV_NO_CONFIG": "1"
   }
 }
